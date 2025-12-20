@@ -19,6 +19,31 @@ interface Position {
   unrealized_plpc: number;
 }
 
+interface Trade {
+  id: number;
+  timestamp: string;
+  symbol: string;
+  action: string;
+  quantity: number;
+  price: number;
+  order_type: string;
+  status: string;
+}
+
+interface Decision {
+  id: number;
+  timestamp: string;
+  parsed_action: {
+    action: string;
+    symbol: string;
+    quantity: number;
+    confidence: number;
+    reasoning: string;
+  };
+  executed: boolean;
+  blocked_reason: string | null;
+}
+
 interface Status {
   account: Account;
   positions: Position[];
@@ -107,6 +132,9 @@ export default function Dashboard() {
   const [countdown, setCountdown] = useState("--:--");
   const [marketInfo, setMarketInfo] = useState(getMarketStatus());
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [trades, setTrades] = useState<Trade[]>([]);
+  const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [activeTab, setActiveTab] = useState<"trades" | "decisions">("trades");
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const TRADING_INTERVAL = 900; // 15分
@@ -126,6 +154,25 @@ export default function Dashboard() {
     }
   };
 
+  const fetchHistory = async () => {
+    try {
+      const [tradesRes, decisionsRes] = await Promise.all([
+        fetch(`${API_URL}/trades?limit=20`),
+        fetch(`${API_URL}/decisions?limit=20`)
+      ]);
+      if (tradesRes.ok) {
+        const data = await tradesRes.json();
+        setTrades(data.trades || []);
+      }
+      if (decisionsRes.ok) {
+        const data = await decisionsRes.json();
+        setDecisions(data.decisions || []);
+      }
+    } catch (e) {
+      console.error("Failed to fetch history:", e);
+    }
+  };
+
   const toggleBot = async () => {
     try {
       const endpoint = botRunning ? "/stop" : "/start";
@@ -138,8 +185,13 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchStatus();
+    fetchHistory();
     const statusInterval = setInterval(fetchStatus, 30000);
-    return () => clearInterval(statusInterval);
+    const historyInterval = setInterval(fetchHistory, 60000);
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(historyInterval);
+    };
   }, []);
 
   // 1秒ごとにカウントダウン更新
@@ -314,6 +366,132 @@ export default function Dashboard() {
                   ))}
                 </tbody>
               </table>
+            )}
+          </div>
+
+          {/* Trade History Section */}
+          <div className="bg-gray-800 rounded-lg p-6 mt-6">
+            <div className="flex gap-4 mb-4">
+              <button
+                onClick={() => setActiveTab("trades")}
+                className={`px-4 py-2 rounded-lg font-bold ${
+                  activeTab === "trades"
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                }`}
+              >
+                📜 Trade History
+              </button>
+              <button
+                onClick={() => setActiveTab("decisions")}
+                className={`px-4 py-2 rounded-lg font-bold ${
+                  activeTab === "decisions"
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                }`}
+              >
+                🧠 AI Decisions
+              </button>
+            </div>
+
+            {activeTab === "trades" && (
+              <>
+                {trades.length === 0 ? (
+                  <p className="text-gray-400">No trades yet</p>
+                ) : (
+                  <table className="w-full">
+                    <thead>
+                      <tr className="text-left text-gray-400 border-b border-gray-700">
+                        <th className="pb-2">Time</th>
+                        <th className="pb-2">Symbol</th>
+                        <th className="pb-2">Action</th>
+                        <th className="pb-2">Qty</th>
+                        <th className="pb-2">Price</th>
+                        <th className="pb-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {trades.map((trade) => (
+                        <tr key={trade.id} className="border-b border-gray-700">
+                          <td className="py-2 text-sm text-gray-400">
+                            {trade.timestamp ? new Date(trade.timestamp).toLocaleString() : "-"}
+                          </td>
+                          <td className="py-2 font-bold">{trade.symbol}</td>
+                          <td className={`py-2 font-bold ${
+                            trade.action === "buy" ? "text-green-400" : "text-red-400"
+                          }`}>
+                            {trade.action.toUpperCase()}
+                          </td>
+                          <td className="py-2">{trade.quantity}</td>
+                          <td className="py-2">${trade.price?.toFixed(2) || "-"}</td>
+                          <td className="py-2">
+                            <span className={`px-2 py-1 rounded text-xs ${
+                              trade.status === "filled" ? "bg-green-900 text-green-300" :
+                              trade.status === "pending" ? "bg-yellow-900 text-yellow-300" :
+                              "bg-gray-700 text-gray-300"
+                            }`}>
+                              {trade.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+
+            {activeTab === "decisions" && (
+              <>
+                {decisions.length === 0 ? (
+                  <p className="text-gray-400">No decisions yet</p>
+                ) : (
+                  <div className="space-y-3">
+                    {decisions.map((decision) => (
+                      <div key={decision.id} className="bg-gray-700 rounded-lg p-4">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-1 rounded text-sm font-bold ${
+                              decision.parsed_action?.action === "buy" ? "bg-green-900 text-green-300" :
+                              decision.parsed_action?.action === "sell" ? "bg-red-900 text-red-300" :
+                              "bg-gray-600 text-gray-300"
+                            }`}>
+                              {decision.parsed_action?.action?.toUpperCase() || "UNKNOWN"}
+                            </span>
+                            <span className="font-bold">{decision.parsed_action?.symbol || "-"}</span>
+                            <span className="text-gray-400">x{decision.parsed_action?.quantity || 0}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-1 rounded text-xs ${
+                              decision.executed ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300"
+                            }`}>
+                              {decision.executed ? "Executed" : "Not Executed"}
+                            </span>
+                            <span className="text-gray-400 text-sm">
+                              {decision.timestamp ? new Date(decision.timestamp).toLocaleString() : "-"}
+                            </span>
+                          </div>
+                        </div>
+                        {decision.parsed_action?.confidence && (
+                          <div className="text-sm text-gray-400 mb-1">
+                            Confidence: {decision.parsed_action.confidence}%
+                          </div>
+                        )}
+                        {decision.parsed_action?.reasoning && (
+                          <div className="text-sm text-gray-300">
+                            {decision.parsed_action.reasoning}
+                          </div>
+                        )}
+                        {decision.blocked_reason && (
+                          <div className="text-sm text-yellow-400 mt-2">
+                            ⚠️ {decision.blocked_reason}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </>

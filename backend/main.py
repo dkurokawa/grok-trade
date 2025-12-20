@@ -1,6 +1,7 @@
 """Grok Trade Bot - メインエントリーポイント"""
 import os
 import asyncio
+import json
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -16,6 +17,7 @@ from grok_client import GrokClient
 from risk_guard import RiskGuard
 from trader import Trader
 from discord_notifier import DiscordNotifier
+from db import Trade, Decision, SystemState, init_db, get_session
 
 
 # グローバルインスタンス
@@ -27,6 +29,93 @@ scheduler = AsyncIOScheduler(timezone="America/New_York")
 
 # 監視対象銘柄
 WATCHLIST = ["MSTR", "TSLA", "QQQ", "SPY"]
+
+
+def log_decision(market_context: dict, grok_response: str, parsed_action: dict, executed: bool, blocked_reason: str = None):
+    """Grokの判断をDBに記録"""
+    session = get_session()
+    if not session:
+        return
+    try:
+        decision = Decision(
+            market_context=market_context,
+            grok_response=grok_response,
+            parsed_action=parsed_action,
+            executed=executed,
+            blocked_reason=blocked_reason
+        )
+        session.add(decision)
+        session.commit()
+        print("[DB] Decision logged")
+    except Exception as e:
+        print(f"[DB] Error logging decision: {e}")
+        session.rollback()
+    finally:
+        session.close()
+
+
+def log_trade(symbol: str, action: str, quantity: float, price: float, order_type: str, status: str, alpaca_order_id: str):
+    """取引をDBに記録"""
+    session = get_session()
+    if not session:
+        return
+    try:
+        trade = Trade(
+            symbol=symbol,
+            action=action,
+            quantity=quantity,
+            price=price,
+            order_type=order_type,
+            status=status,
+            alpaca_order_id=alpaca_order_id
+        )
+        session.add(trade)
+        session.commit()
+        print("[DB] Trade logged")
+    except Exception as e:
+        print(f"[DB] Error logging trade: {e}")
+        session.rollback()
+    finally:
+        session.close()
+
+
+def get_scheduler_state() -> bool:
+    """DB からスケジューラー状態を取得"""
+    session = get_session()
+    if not session:
+        return True  # デフォルトは起動
+    try:
+        state = session.query(SystemState).filter_by(key="scheduler_running").first()
+        if state:
+            return state.value.get("running", True)
+        return True
+    except Exception as e:
+        print(f"[DB] Error getting scheduler state: {e}")
+        return True
+    finally:
+        session.close()
+
+
+def set_scheduler_state(running: bool):
+    """DB にスケジューラー状態を保存"""
+    session = get_session()
+    if not session:
+        return
+    try:
+        state = session.query(SystemState).filter_by(key="scheduler_running").first()
+        if state:
+            state.value = {"running": running}
+            state.updated_at = datetime.utcnow()
+        else:
+            state = SystemState(key="scheduler_running", value={"running": running})
+            session.add(state)
+        session.commit()
+        print(f"[DB] Scheduler state saved: {running}")
+    except Exception as e:
+        print(f"[DB] Error setting scheduler state: {e}")
+        session.rollback()
+    finally:
+        session.close()
 
 
 async def trading_cycle():
@@ -79,6 +168,14 @@ async def trading_cycle():
         # 5. Hold なら終了
         if decision["action"] == "hold":
             print("[Action] Hold - no trade")
+            # DBに決定を記録
+            log_decision(
+                market_context={"positions": positions, "market_data": market_data},
+                grok_response=json.dumps(decision),
+                parsed_action=decision,
+                executed=False,
+                blocked_reason="hold"
+            )
             return
 
         # 6. 価格取得（リスクチェック用）
@@ -102,6 +199,14 @@ async def trading_cycle():
         if not risk_check.allowed:
             print(f"[RiskGuard] Order blocked: {risk_check.reason}")
             await notifier.notify_alert(f"Order blocked: {risk_check.reason}", "warning")
+            # DBに決定を記録
+            log_decision(
+                market_context={"positions": positions, "market_data": market_data},
+                grok_response=json.dumps(decision),
+                parsed_action=decision,
+                executed=False,
+                blocked_reason=risk_check.reason
+            )
             return
 
         # 8. 注文実行
@@ -122,9 +227,34 @@ async def trading_cycle():
                 quantity=decision["quantity"],
                 price=price
             )
+            # DBに取引と決定を記録
+            log_trade(
+                symbol=symbol,
+                action=decision["action"],
+                quantity=decision["quantity"],
+                price=price,
+                order_type=decision.get("order_type", "market"),
+                status=order["status"],
+                alpaca_order_id=order["order_id"]
+            )
+            log_decision(
+                market_context={"positions": positions, "market_data": market_data},
+                grok_response=json.dumps(decision),
+                parsed_action=decision,
+                executed=True,
+                blocked_reason=None
+            )
         else:
             print("[Order] Failed to execute")
             await notifier.notify_alert(f"Order failed: {symbol}", "error")
+            # DBに失敗した決定を記録
+            log_decision(
+                market_context={"positions": positions, "market_data": market_data},
+                grok_response=json.dumps(decision),
+                parsed_action=decision,
+                executed=False,
+                blocked_reason="order_execution_failed"
+            )
 
     except Exception as e:
         print(f"[Error] Trading cycle failed: {e}")
@@ -134,6 +264,9 @@ async def trading_cycle():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """アプリケーションライフサイクル"""
+    # DB初期化
+    init_db()
+
     # 起動時
     interval = int(os.getenv("TRADING_INTERVAL", "900"))  # デフォルト15分
 
@@ -145,11 +278,15 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
 
-    print(f"🚀 Grok Trade Bot started (interval: {interval}s)")
-    await notifier.notify_alert("🚀 Grok Trade Bot started!", "info")
-
-    # 初回実行
-    await trading_cycle()
+    # 前回の状態を復元
+    if not get_scheduler_state():
+        print("[DB] Restoring paused state from previous session")
+        scheduler.pause()
+    else:
+        print(f"🚀 Grok Trade Bot started (interval: {interval}s)")
+        await notifier.notify_alert("🚀 Grok Trade Bot started!", "info")
+        # 初回実行
+        await trading_cycle()
 
     yield
 
@@ -195,6 +332,7 @@ async def status():
 async def stop():
     """緊急停止"""
     scheduler.pause()
+    set_scheduler_state(False)
     await notifier.notify_system_stop("Manual stop via API")
     return {"status": "stopped"}
 
@@ -203,8 +341,65 @@ async def stop():
 async def start():
     """再開"""
     scheduler.resume()
+    set_scheduler_state(True)
     await notifier.notify_alert("🔄 Bot resumed", "info")
     return {"status": "running"}
+
+
+@app.get("/trades")
+async def get_trades(limit: int = 50):
+    """取引履歴取得"""
+    session = get_session()
+    if not session:
+        return {"trades": [], "error": "Database not available"}
+    try:
+        trades = session.query(Trade).order_by(Trade.timestamp.desc()).limit(limit).all()
+        return {
+            "trades": [
+                {
+                    "id": t.id,
+                    "timestamp": t.timestamp.isoformat() if t.timestamp else None,
+                    "symbol": t.symbol,
+                    "action": t.action,
+                    "quantity": t.quantity,
+                    "price": t.price,
+                    "order_type": t.order_type,
+                    "status": t.status,
+                    "alpaca_order_id": t.alpaca_order_id
+                }
+                for t in trades
+            ]
+        }
+    except Exception as e:
+        return {"trades": [], "error": str(e)}
+    finally:
+        session.close()
+
+
+@app.get("/decisions")
+async def get_decisions(limit: int = 50):
+    """Grok判断履歴取得"""
+    session = get_session()
+    if not session:
+        return {"decisions": [], "error": "Database not available"}
+    try:
+        decisions = session.query(Decision).order_by(Decision.timestamp.desc()).limit(limit).all()
+        return {
+            "decisions": [
+                {
+                    "id": d.id,
+                    "timestamp": d.timestamp.isoformat() if d.timestamp else None,
+                    "parsed_action": d.parsed_action,
+                    "executed": d.executed,
+                    "blocked_reason": d.blocked_reason
+                }
+                for d in decisions
+            ]
+        }
+    except Exception as e:
+        return {"decisions": [], "error": str(e)}
+    finally:
+        session.close()
 
 
 if __name__ == "__main__":
