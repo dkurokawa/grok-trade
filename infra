@@ -1,0 +1,335 @@
+
+## Alpaca自動売買システム 設計書（確定版）
+
+### アーキテクチャ
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Railway                                              │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  Main Service (Python)                        │   │
+│  │                                               │   │
+│  │  ┌─────────────┐  ┌─────────────────────┐    │   │
+│  │  │ Scheduler   │  │ Grok Client         │    │   │
+│  │  │ (APScheduler)│  │ - 市場分析          │    │   │
+│  │  └──────┬──────┘  │ - 判断生成          │    │   │
+│  │         │         └──────────┬──────────┘    │   │
+│  │         │                    │               │   │
+│  │         └────────┬───────────┘               │   │
+│  │                  ▼                           │   │
+│  │         ┌─────────────────────┐              │   │
+│  │         │ Risk Guard          │              │   │
+│  │         │ - 損失上限チェック   │              │   │
+│  │         │ - ポジション制限     │              │   │
+│  │         └──────────┬──────────┘              │   │
+│  │                    ▼                         │   │
+│  │         ┌─────────────────────┐              │   │
+│  │         │ Alpaca MCP Server   │              │   │
+│  │         │ - 自然言語→発注     │              │   │
+│  │         └──────────┬──────────┘              │   │
+│  │                    │                         │   │
+│  └────────────────────┼─────────────────────────┘   │
+│                       │                             │
+│  ┌────────────────────▼─────────────────────────┐   │
+│  │  PostgreSQL (Railway addon)                   │   │
+│  │  - 取引ログ / 思考ログ / 設定                 │   │
+│  └───────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────┘
+                        │
+          ┌─────────────┴─────────────┐
+          ▼                           ▼
+┌──────────────────┐        ┌──────────────────┐
+│  Alpaca API      │        │  Discord Webhook │
+│  (本番/ペーパー)  │        │  (通知)          │
+└──────────────────┘        └──────────────────┘
+
+┌──────────────────────────────────────────────────────┐
+│  Vercel                                               │
+│  ┌───────────────────────────────────────────────┐   │
+│  │  Dashboard (Next.js)                           │   │
+│  │  - リアルタイムP&L                             │   │
+│  │  - 取引履歴・思考ログ                          │   │
+│  │  - 緊急停止ボタン                              │   │
+│  └───────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────┘
+```
+
+---
+
+### 技術スタック
+
+| レイヤー | 技術 |
+|---------|------|
+| AI | Grok turbo API |
+| 発注 | Alpaca MCP Server |
+| Backend | Python（MCP Serverとの相性） |
+| Scheduler | APScheduler |
+| Hosting | Railway |
+| DB | Railway PostgreSQL |
+| Dashboard | Next.js on Vercel |
+| 通知 | Discord Webhook |
+
+---
+
+### Railway構成
+
+```yaml
+# railway.toml
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python main.py"
+healthcheckPath = "/health"
+restartPolicyType = "always"
+```
+
+**サービス構成：**
+- Main Service: 1つ（Python常駐プロセス）
+- PostgreSQL: Railway addon
+- 環境変数: ダッシュボードで設定
+
+---
+
+### 環境変数
+
+```env
+# Alpaca
+ALPACA_API_KEY=xxx
+ALPACA_SECRET_KEY=xxx
+ALPACA_PAPER=true  # 本番時はfalse
+
+# Grok
+GROK_API_KEY=xxx
+
+# Database
+DATABASE_URL=postgres://...  # Railway自動設定
+
+# Discord
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+
+# 設定
+MAX_DAILY_LOSS=500        # $500で停止
+MAX_POSITION_RATIO=0.5    # 資金の50%まで
+TRADING_INTERVAL=900      # 15分間隔
+```
+
+---
+
+### DBスキーマ
+
+```sql
+-- 取引ログ
+CREATE TABLE trades (
+  id SERIAL PRIMARY KEY,
+  timestamp TIMESTAMPTZ DEFAULT NOW(),
+  symbol VARCHAR(50),
+  action VARCHAR(10),  -- buy/sell
+  quantity DECIMAL,
+  price DECIMAL,
+  order_type VARCHAR(20),
+  status VARCHAR(20),
+  alpaca_order_id VARCHAR(100)
+);
+
+-- Grok思考ログ
+CREATE TABLE decisions (
+  id SERIAL PRIMARY KEY,
+  timestamp TIMESTAMPTZ DEFAULT NOW(),
+  market_context JSONB,    -- Grokへの入力
+  grok_response TEXT,      -- 生レスポンス
+  parsed_action JSONB,     -- パース結果
+  executed BOOLEAN,
+  blocked_reason TEXT      -- Risk Guardで止めた理由
+);
+
+-- 日次サマリー
+CREATE TABLE daily_summary (
+  date DATE PRIMARY KEY,
+  starting_balance DECIMAL,
+  ending_balance DECIMAL,
+  pnl DECIMAL,
+  trade_count INT,
+  win_rate DECIMAL
+);
+
+-- システム状態
+CREATE TABLE system_state (
+  key VARCHAR(50) PRIMARY KEY,
+  value JSONB,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
+### Claudeからの注意点
+
+#### 1. MCP Serverの扱い
+
+```
+⚠️ ステートレス
+```
+- 毎回フルコンテキストを渡す
+- 「さっきの」は通じない、常に明示的に指示
+
+#### 2. Grokの出力制御
+
+```
+⚠️ 必ずJSONで返させる
+```
+
+```python
+PROMPT_TEMPLATE = """
+現在の状況:
+- 残高: ${balance}
+- ポジション: {positions}
+- 市場データ: {market_data}
+
+以下のJSON形式で判断してください：
+{
+  "action": "buy" | "sell" | "hold",
+  "symbol": "銘柄コード",
+  "quantity": 数値,
+  "order_type": "market" | "limit",
+  "reasoning": "理由",
+  "confidence": 0-100
+}
+"""
+```
+
+パースに失敗したら発注しない。
+
+#### 3. オプションのシンボル
+
+```
+⚠️ Grokにシンボル生成させない
+```
+
+悪い例：
+```
+Grok: "AAPL240119C00100000を買って"
+→ 日付・価格の組み合わせミスのリスク
+```
+
+良い例：
+```
+Grok: "AAPLの来週金曜満期、現在価格+5%のコールを買って"
+→ MCP Serverが正しいシンボルに変換
+```
+
+#### 4. 時間帯
+
+```
+⚠️ 全てEST基準で考える
+```
+
+| イベント | EST | JST |
+|---------|-----|-----|
+| プレマーケット | 4:00 | 18:00 |
+| 市場オープン | 9:30 | 23:30 |
+| 市場クローズ | 16:00 | 6:00 |
+
+Railway環境変数に`TZ=America/New_York`設定。
+
+#### 5. レート制限
+
+```
+⚠️ Alpaca API: 200リクエスト/分
+```
+
+- ポーリングは最低5秒間隔
+- 可能ならWebSocket使う
+
+#### 6. ペーパー vs 本番
+
+```
+⚠️ ペーパーは約定が甘い
+```
+
+本番で起きること：
+- スリッページ
+- 部分約定
+- 約定拒否
+
+対策：
+- リミット注文推奨
+- 流動性高い銘柄に絞る（SPY, QQQ）
+
+#### 7. ログは命
+
+```
+⚠️ 全部残す
+```
+
+記録するもの：
+- Grokへの入力
+- Grokの生出力
+- パース結果
+- 発注内容
+- 約定結果
+- Risk Guardの判断
+
+後から検証できないと改善できない。
+
+#### 8. 緊急停止
+
+```
+⚠️ 止める手段を複数用意
+```
+
+- ダッシュボードの停止ボタン → `system_state`テーブル更新
+- Discord通知 → 手動でRailway停止
+- 損失上限到達 → 自動停止
+
+---
+
+### コスト
+
+| 項目 | 月額 |
+|------|------|
+| Railway Hobby | $5 |
+| Railway PostgreSQL | $5〜 |
+| Grok API | $10-30（使用量次第） |
+| Alpaca | $0 |
+| Vercel | $0（Hobby） |
+| Discord | $0 |
+| **合計** | **$20-40/月** |
+
+---
+
+### 開発順序
+
+```
+Week 1: 基盤
+├─ Alpaca口座開設（ペーパー）
+├─ Railway環境構築
+├─ MCP Server動作確認
+└─ 「SPY 1株買う」が通る状態
+
+Week 2-3: コア
+├─ Grokプロンプト設計
+├─ 出力パーサー
+├─ Risk Guard
+├─ Scheduler
+└─ DBログ記録
+
+Week 4: ダッシュボード
+├─ Vercel + Next.js
+├─ Railway PostgreSQL接続
+├─ P&L表示
+└─ 停止ボタン
+
+Week 5: バックテスト
+├─ 過去データ取得
+├─ シミュレーション実行
+└─ 結果分析・プロンプト調整
+
+Week 6: 本番
+├─ 本番口座切り替え
+├─ 少額テスト（$500）
+├─ 問題なければ$6,500投入
+└─ 企画スタート
+```
+
+---

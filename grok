@@ -1,0 +1,111 @@
+### AlpacaとGrokを使った自動売買システムの仕様まとめ（2025年12月版）
+
+以下に、**Alpaca Trading API**と**xAI Grok API**を組み合わせた自動売買ボットの構築仕様を詳細にまとめました。  
+これは主にPythonベースのシステムを想定。リスク極大許容の君のスタイル（月1リバランス + 急変監視）に合わせて、低頻度〜中頻度運用向けに設計。
+
+このドキュメントはテキストベースなので、**コピーしてMarkdownファイル（.md）やテキストファイル（.txt）として保存**してください。ダウンロードしたい場合、ブラウザでこのページを印刷→PDF保存、またはテキストを選択して保存でOKです。
+
+#### 1. 全体アーキテクチャ概要
+- **Grokの役割**: 市場分析、シグナル生成、売買判断（自然言語プロンプトで戦略立案やデータ解釈）。
+- **Alpacaの役割**: 実際の注文実行、ポジション管理、市場データ取得。
+- **統合方法**:
+  - Grok APIで分析 → Pythonスクリプトで判断 → Alpaca APIで注文。
+  - **最強統合**: Alpacaの**MCP Server**（Model Context Protocol）を使って、Grokが直接Alpacaツールを呼び出せる（自然言語で「MSTRを買え」と命令可能）。
+- **運用頻度**: 月1リバランス + 急変監視（5分おきアラート）。高頻度にするとコスト/リスク増。
+- **環境**: Python 3.10+、クラウド（RunPod/OCI/AWS）推奨。
+
+#### 2. 前提条件
+- **Alpacaアカウント**: Paper（テスト）またはLive。APIキー生成（Dashboard → API Keys）。
+  - Base URL: Paper `https://paper-api.alpaca.markets`, Live `https://api.alpaca.markets`
+- **xAI Grok API**: https://x.ai/api でアカウント作成、APIキー取得。モデル: grok-4（推論強力）、grok-4-1-fast（エージェントツール対応）。
+- **ライブラリ**:
+  ```bash
+  pip install alpaca-py xai-sdk requests pandas numpy
+  ```
+
+#### 3. Alpaca API 主要仕様
+- **認証**: Headerに `APCA-API-KEY-ID` と `APCA-API-SECRET-KEY`。
+- **Rate Limit**: 200リクエスト/分（標準）。Market Data Unlimitedプランで1000/分に増。
+- **主なエンドポイント**:
+  - アカウント: `/v2/account` (GET)
+  - ポジション: `/v2/positions` (GET)
+  - 注文: `/v2/orders` (POST: market/limit/stopなど)
+  - 市場データ: `/v2/stocks/{symbol}/bars` (歴史データ)
+  - WebSocket: リアルタイムストリーム（trades/quotes）。
+- **対応資産**: 米国株、ETF、オプション、暗号通貨（BTCなど）。
+- **Python SDK (alpaca-py)**:
+  ```python
+  from alpaca.trading.client import TradingClient
+  from alpaca.data.historical import StockHistoricalDataClient
+
+  trading_client = TradingClient('KEY_ID', 'SECRET_KEY', paper=True)
+  data_client = StockHistoricalDataClient('KEY_ID', 'SECRET_KEY')
+  ```
+
+#### 4. Grok API 主要仕様
+- **Base URL**: `https://api.x.ai/v1`
+- **認証**: Bearer Token (APIキー)。
+- **モデル**: grok-4 (高度推論)、grok-4-1-fast (ツール呼び出し対応)。
+- **ツール統合**: Agent Toolsでweb_search, code_execution, mcp (外部ツール呼び出し)。
+- **MCP統合でAlpaca連携**: AlpacaのMCP ServerをGrokのツールとして登録可能（自然言語で取引）。
+- **Python例**:
+  ```python
+  from xai_sdk import Client
+
+  client = Client(api_key="YOUR_XAI_API_KEY")
+  chat = client.chat.create(model="grok-4", messages=[{"role": "user", "content": "BTCの分析をして、MSTRを買うべきか判断して"}])
+  ```
+
+#### 5. 自動売買ボットの基本構成例（Pythonスクリプト）
+```python
+import os
+from alpaca.trading.client import TradingClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from xai_sdk import Client
+import pandas as pd
+
+# APIキー設定
+ALPACA_KEY = os.getenv('ALPACA_KEY')
+ALPACA_SECRET = os.getenv('ALPACA_SECRET')
+GROK_KEY = os.getenv('GROK_KEY')
+
+trading_client = TradingClient(ALPACA_KEY, ALPACA_SECRET, paper=True)
+grok_client = Client(api_key=GROK_KEY)
+
+def get_market_data(symbols=['MSTR', 'TSLA', 'QQQ']):
+    request = StockBarsRequest(symbol_or_symbols=symbols, timeframe=TimeFrame.Day, limit=100)
+    bars = trading_client.get_stock_bars(request).df
+    return bars
+
+def grok_analysis(data_summary):
+    response = grok_client.chat.completions.create(
+        model="grok-4",
+        messages=[{"role": "user", "content": f"以下のデータで分析: {data_summary}. BTC強気前提でMSTR中心ポートフォリオの売買シグナルを出して（buy/sell/holdと理由）"}]
+    )
+    return response.choices[0].message.content
+
+def execute_trade(signal, symbol='MSTR', qty=1):
+    if 'buy' in signal.lower():
+        trading_client.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc')
+    elif 'sell' in signal.lower():
+        trading_client.submit_order(symbol=symbol, qty=qty, side='sell', type='market', time_in_force='gtc')
+
+# メインループ（月1実行 or スケジューラで）
+data = get_market_data()
+summary = data.to_string()  # または要約
+signal = grok_analysis(summary)
+execute_trade(signal)
+```
+
+#### 6. 高度統合: Alpaca MCP Server + Grok Agent Tools
+- Alpaca MCP Server（GitHub: https://github.com/alpacahq/alpaca-mcp-server）起動。
+- GrokのツールにMCP登録 → Grokが自然言語で直接Alpaca注文可能。
+- 例: Grokプロンプト「MSTRを10万円分買って」 → 自動実行。
+
+#### 7. 運用Tips（君のスタイル向け）
+- **月1リバランス**: CronやAWS Lambdaでスケジュール。
+- **急変監視**: WebSocketでリアルタイム監視、-10%変動でGrokに相談。
+- **リスク管理**: 注文前に確認ログ、Paperでテスト必須。
+- **コスト**: Alpaca手数料無料（一部プラン有料）。Grok APIはトークン課金。
+- **注意**: 自動売買は損失リスク大。税金・規制遵守を。
