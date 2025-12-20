@@ -9,6 +9,7 @@ load_dotenv()
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from grok_client import GrokClient
@@ -159,6 +160,15 @@ async def lifespan(app: FastAPI):
 
 # FastAPIアプリ（ヘルスチェック用）
 app = FastAPI(lifespan=lifespan)
+
+# CORS設定（Dashboard からのアクセスを許可）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 本番では Vercel URL に限定推奨
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
