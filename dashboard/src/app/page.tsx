@@ -25,13 +25,91 @@ interface Status {
   scheduler_running: boolean;
 }
 
+type MarketStatus = "pre" | "open" | "post";
+
+function getMarketStatus(): { status: MarketStatus; label: string; color: string } {
+  const now = new Date();
+  const nyTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const hours = nyTime.getHours();
+  const minutes = nyTime.getMinutes();
+  const day = nyTime.getDay();
+  const time = hours * 60 + minutes;
+
+  // 週末
+  if (day === 0 || day === 6) {
+    return { status: "post", label: "Weekend - Market Closed", color: "gray" };
+  }
+
+  const marketOpen = 9 * 60 + 30;  // 9:30 AM
+  const marketClose = 16 * 60;      // 4:00 PM
+
+  if (time < marketOpen) {
+    return { status: "pre", label: "Pre-Market", color: "yellow" };
+  } else if (time >= marketOpen && time < marketClose) {
+    return { status: "open", label: "Market Open", color: "green" };
+  } else {
+    return { status: "post", label: "After Hours", color: "orange" };
+  }
+}
+
+function getNextTradeCountdown(intervalSeconds: number): string {
+  const now = new Date();
+  const seconds = now.getSeconds();
+  const minutes = now.getMinutes();
+  const totalSeconds = minutes * 60 + seconds;
+  const remaining = intervalSeconds - (totalSeconds % intervalSeconds);
+  const mins = Math.floor(remaining / 60);
+  const secs = remaining % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function getTimeUntilMarketOpen(): string {
+  const now = new Date();
+  const nyTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const hours = nyTime.getHours();
+  const minutes = nyTime.getMinutes();
+
+  const marketOpenMinutes = 9 * 60 + 30;
+  const currentMinutes = hours * 60 + minutes;
+
+  let diffMinutes = marketOpenMinutes - currentMinutes;
+  if (diffMinutes < 0) {
+    diffMinutes += 24 * 60; // 翌日
+  }
+
+  const h = Math.floor(diffMinutes / 60);
+  const m = diffMinutes % 60;
+  return `${h}h ${m}m`;
+}
+
+function getTimeUntilMarketClose(): string {
+  const now = new Date();
+  const nyTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const hours = nyTime.getHours();
+  const minutes = nyTime.getMinutes();
+
+  const marketCloseMinutes = 16 * 60;
+  const currentMinutes = hours * 60 + minutes;
+
+  const diffMinutes = marketCloseMinutes - currentMinutes;
+  if (diffMinutes <= 0) return "Closed";
+
+  const h = Math.floor(diffMinutes / 60);
+  const m = diffMinutes % 60;
+  return `${h}h ${m}m`;
+}
+
 export default function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [botRunning, setBotRunning] = useState(true);
+  const [countdown, setCountdown] = useState("--:--");
+  const [marketInfo, setMarketInfo] = useState(getMarketStatus());
+  const [currentTime, setCurrentTime] = useState(new Date());
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const TRADING_INTERVAL = 900; // 15分
 
   const fetchStatus = async () => {
     try {
@@ -60,8 +138,18 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 30000); // 30秒ごと更新
-    return () => clearInterval(interval);
+    const statusInterval = setInterval(fetchStatus, 30000);
+    return () => clearInterval(statusInterval);
+  }, []);
+
+  // 1秒ごとにカウントダウン更新
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCountdown(getNextTradeCountdown(TRADING_INTERVAL));
+      setMarketInfo(getMarketStatus());
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
   }, []);
 
   if (loading) {
@@ -71,6 +159,13 @@ export default function Dashboard() {
       </div>
     );
   }
+
+  const marketColorClass = {
+    green: "bg-green-900 text-green-300 border-green-700",
+    yellow: "bg-yellow-900 text-yellow-300 border-yellow-700",
+    orange: "bg-orange-900 text-orange-300 border-orange-700",
+    gray: "bg-gray-700 text-gray-300 border-gray-600",
+  }[marketInfo.color];
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
@@ -96,17 +191,60 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Status Badge */}
-      <div className="mb-6">
-        <span
-          className={`px-4 py-2 rounded-full text-sm font-medium ${
-            botRunning
-              ? "bg-green-900 text-green-300"
-              : "bg-red-900 text-red-300"
-          }`}
-        >
-          {botRunning ? "● Bot Running" : "○ Bot Stopped"}
-        </span>
+      {/* Market Status & Bot Status */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        {/* Market Status */}
+        <div className={`p-4 rounded-lg border ${marketColorClass}`}>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm opacity-75">US Market</div>
+              <div className="text-xl font-bold">{marketInfo.label}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-sm opacity-75">
+                NY: {currentTime.toLocaleString("en-US", {
+                  timeZone: "America/New_York",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                  hour12: false
+                })}
+              </div>
+              {marketInfo.status === "pre" && (
+                <div className="text-sm">Opens in {getTimeUntilMarketOpen()}</div>
+              )}
+              {marketInfo.status === "open" && (
+                <div className="text-sm">Closes in {getTimeUntilMarketClose()}</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Bot Status & Countdown */}
+        <div className={`p-4 rounded-lg border ${
+          botRunning ? "bg-green-900 border-green-700" : "bg-red-900 border-red-700"
+        }`}>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm opacity-75">Bot Status</div>
+              <div className="text-xl font-bold">
+                {botRunning ? "● Running" : "○ Stopped"}
+              </div>
+            </div>
+            {botRunning && marketInfo.status === "open" && (
+              <div className="text-right">
+                <div className="text-sm opacity-75">Next Trade In</div>
+                <div className="text-2xl font-mono font-bold">{countdown}</div>
+              </div>
+            )}
+            {botRunning && marketInfo.status !== "open" && (
+              <div className="text-right">
+                <div className="text-sm opacity-75">Waiting for</div>
+                <div className="text-lg font-bold">Market Open</div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {status && (
