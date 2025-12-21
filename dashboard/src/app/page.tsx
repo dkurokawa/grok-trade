@@ -128,7 +128,7 @@ export default function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [botRunning, setBotRunning] = useState(true);
+  const [botRunning, setBotRunning] = useState<boolean | null>(null);  // null = まだ不明
   const [countdown, setCountdown] = useState("--:--");
   const [marketInfo, setMarketInfo] = useState(getMarketStatus());
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -176,10 +176,22 @@ export default function Dashboard() {
   const toggleBot = async () => {
     try {
       const endpoint = botRunning ? "/stop" : "/start";
-      await fetch(`${API_URL}${endpoint}`, { method: "POST" });
-      setBotRunning(!botRunning);
+      const res = await fetch(`${API_URL}${endpoint}`, { method: "POST" });
+      if (!res.ok) throw new Error("Failed to toggle bot");
+      const data = await res.json();
+      // APIレスポンスから実際の状態を取得
+      if (data.status === "running") {
+        setBotRunning(true);
+      } else if (data.status === "stopped") {
+        setBotRunning(false);
+      } else {
+        // フォールバック: 反転
+        setBotRunning(!botRunning);
+      }
+      setError(null);
     } catch (e) {
       setError("Failed to toggle bot");
+      // エラー時は状態を更新しない（現在の状態を維持）
     }
   };
 
@@ -226,13 +238,16 @@ export default function Dashboard() {
         <h1 className="text-3xl font-bold">🤖 Grok Trade Dashboard</h1>
         <button
           onClick={toggleBot}
+          disabled={botRunning === null}
           className={`px-6 py-3 rounded-lg font-bold text-lg transition-colors ${
-            botRunning
-              ? "bg-red-600 hover:bg-red-700"
-              : "bg-green-600 hover:bg-green-700"
+            botRunning === null
+              ? "bg-gray-600 cursor-not-allowed"
+              : botRunning
+                ? "bg-red-600 hover:bg-red-700"
+                : "bg-green-600 hover:bg-green-700"
           }`}
         >
-          {botRunning ? "🛑 STOP BOT" : "▶️ START BOT"}
+          {botRunning === null ? "⏳ Loading..." : botRunning ? "🛑 STOP BOT" : "▶️ START BOT"}
         </button>
       </div>
 
@@ -274,13 +289,14 @@ export default function Dashboard() {
 
         {/* Bot Status & Countdown */}
         <div className={`p-4 rounded-lg border ${
+          botRunning === null ? "bg-gray-700 border-gray-600" :
           botRunning ? "bg-green-900 border-green-700" : "bg-red-900 border-red-700"
         }`}>
           <div className="flex items-center justify-between">
             <div>
               <div className="text-sm opacity-75">Bot Status</div>
               <div className="text-xl font-bold">
-                {botRunning ? "● Running" : "○ Stopped"}
+                {botRunning === null ? "◌ Loading..." : botRunning ? "● Running" : "○ Stopped"}
               </div>
             </div>
             {botRunning && marketInfo.status === "open" && (
