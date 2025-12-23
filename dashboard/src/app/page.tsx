@@ -128,7 +128,7 @@ export default function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [botRunning, setBotRunning] = useState<boolean | null>(null);  // null = まだ不明
+  const [crawlerRunning, setCrawlerRunning] = useState<boolean | null>(null);  // null = まだ不明
   const [countdown, setCountdown] = useState("--:--");
   const [marketInfo, setMarketInfo] = useState(getMarketStatus());
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -145,7 +145,7 @@ export default function Dashboard() {
       if (!res.ok) throw new Error("Failed to fetch status");
       const data = await res.json();
       setStatus(data);
-      setBotRunning(data.scheduler_running);
+      setCrawlerRunning(data.scheduler_running);
       setError(null);
     } catch (e) {
       setError("Backend not reachable");
@@ -173,24 +173,24 @@ export default function Dashboard() {
     }
   };
 
-  const toggleBot = async () => {
+  const toggleCrawler = async () => {
     try {
-      const endpoint = botRunning ? "/stop" : "/start";
+      const endpoint = crawlerRunning ? "/stop" : "/start";
       const res = await fetch(`${API_URL}${endpoint}`, { method: "POST" });
-      if (!res.ok) throw new Error("Failed to toggle bot");
+      if (!res.ok) throw new Error("Failed to toggle crawler");
       const data = await res.json();
       // APIレスポンスから実際の状態を取得
       if (data.status === "running") {
-        setBotRunning(true);
+        setCrawlerRunning(true);
       } else if (data.status === "stopped") {
-        setBotRunning(false);
+        setCrawlerRunning(false);
       } else {
         // フォールバック: 反転
-        setBotRunning(!botRunning);
+        setCrawlerRunning(!crawlerRunning);
       }
       setError(null);
     } catch (e) {
-      setError("Failed to toggle bot");
+      setError("Failed to toggle crawler");
       // エラー時は状態を更新しない（現在の状態を維持）
     }
   };
@@ -237,17 +237,17 @@ export default function Dashboard() {
       <div className="flex justify-between items-center mb-8">
         <h1 className="text-3xl font-bold">🤖 Grok Trade Dashboard</h1>
         <button
-          onClick={toggleBot}
-          disabled={botRunning === null}
+          onClick={toggleCrawler}
+          disabled={crawlerRunning === null}
           className={`px-6 py-3 rounded-lg font-bold text-lg transition-colors ${
-            botRunning === null
+            crawlerRunning === null
               ? "bg-gray-600 cursor-not-allowed"
-              : botRunning
+              : crawlerRunning
                 ? "bg-red-600 hover:bg-red-700"
                 : "bg-green-600 hover:bg-green-700"
           }`}
         >
-          {botRunning === null ? "⏳ Loading..." : botRunning ? "🛑 STOP BOT" : "▶️ START BOT"}
+          {crawlerRunning === null ? "⏳ Loading..." : crawlerRunning ? "🛑 STOP" : "▶️ START"}
         </button>
       </div>
 
@@ -287,25 +287,25 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Bot Status & Countdown */}
+        {/* Crawler Status & Countdown */}
         <div className={`p-4 rounded-lg border ${
-          botRunning === null ? "bg-gray-700 border-gray-600" :
-          botRunning ? "bg-green-900 border-green-700" : "bg-red-900 border-red-700"
+          crawlerRunning === null ? "bg-gray-700 border-gray-600" :
+          crawlerRunning ? "bg-green-900 border-green-700" : "bg-red-900 border-red-700"
         }`}>
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-sm opacity-75">Bot Status</div>
+              <div className="text-sm opacity-75">Crawler Status</div>
               <div className="text-xl font-bold">
-                {botRunning === null ? "◌ Loading..." : botRunning ? "● Running" : "○ Stopped"}
+                {crawlerRunning === null ? "◌ Loading..." : crawlerRunning ? "● Running" : "○ Stopped"}
               </div>
             </div>
-            {botRunning && marketInfo.status === "open" && (
+            {crawlerRunning && marketInfo.status === "open" && (
               <div className="text-right">
                 <div className="text-sm opacity-75">Next Trade In</div>
                 <div className="text-2xl font-mono font-bold">{countdown}</div>
               </div>
             )}
-            {botRunning && marketInfo.status !== "open" && (
+            {crawlerRunning && marketInfo.status !== "open" && (
               <div className="text-right">
                 <div className="text-sm opacity-75">Waiting for</div>
                 <div className="text-lg font-bold">Market Open</div>
