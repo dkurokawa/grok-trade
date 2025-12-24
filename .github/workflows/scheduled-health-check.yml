@@ -5,8 +5,9 @@ on:
     # 毎時実行（本番環境のヘルスチェック）- 市場開場ラッシュを避ける
     # 14:00-15:00 UTC (9:00-10:00 AM ET) は避ける
     - cron: '0 0-13,16-23 * * *'  # 14,15時以外の毎時
-    # 閉場30分前にE2Eテスト実行 (15:30 ET = 20:30 UTC)
-    # 月〜金のみ
+    # 閉場30分前にE2Eテスト実行
+    # 日本時間: 翌朝5:30 (冬時間) / 4:30 (夏時間)
+    # 月〜金のみ (火〜土の朝)
     - cron: '30 20 * * 1-5'
   workflow_dispatch:
     inputs:
@@ -70,7 +71,7 @@ jobs:
   daily-e2e-test:
     name: Daily E2E Test (Before Market Close)
     runs-on: ubuntu-latest
-    # 閉場30分前 (20:30 UTC / 15:30 ET) に実行 - 月〜金のみ
+    # 閉場30分前に実行 - 日本時間: 翌朝5:30 (冬) / 4:30 (夏)
     if: github.event.schedule == '30 20 * * 1-5'
 
     steps:
