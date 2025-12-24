@@ -402,6 +402,20 @@ async def get_decisions(limit: int = 50):
         session.close()
 
 
+@app.get("/debug/db")
+async def debug_db():
+    """Database connection debug info"""
+    from db.models import DATABASE_URL, engine, SessionLocal
+    db_url = os.getenv("DATABASE_URL", "")
+    return {
+        "database_url_set": bool(db_url),
+        "database_url_length": len(db_url) if db_url else 0,
+        "database_url_prefix": db_url[:25] + "..." if len(db_url) > 25 else db_url if db_url else "NOT SET",
+        "engine_exists": engine is not None,
+        "session_local_exists": SessionLocal is not None,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8000"))
