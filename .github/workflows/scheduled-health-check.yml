@@ -5,6 +5,9 @@ on:
     # 毎時実行（本番環境のヘルスチェック）- 市場開場ラッシュを避ける
     # 14:00-15:00 UTC (9:00-10:00 AM ET) は避ける
     - cron: '0 0-13,16-23 * * *'  # 14,15時以外の毎時
+    # 閉場30分前にE2Eテスト実行 (15:30 ET = 20:30 UTC)
+    # 月〜金のみ
+    - cron: '30 20 * * 1-5'
   workflow_dispatch:
     inputs:
       environment:
@@ -63,6 +66,58 @@ jobs:
               -d '{"content": "🚨 **Grok Trade Bot**: APIヘルスチェック失敗\n環境: Production\n時刻: '"$(date -u '+%Y-%m-%d %H:%M:%S UTC')"'\n詳細: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' \
               "$DISCORD_WEBHOOK"
           fi
+
+  daily-e2e-test:
+    name: Daily E2E Test (Before Market Close)
+    runs-on: ubuntu-latest
+    # 閉場30分前 (20:30 UTC / 15:30 ET) に実行 - 月〜金のみ
+    if: github.event.schedule == '30 20 * * 1-5'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run Production E2E Tests
+        working-directory: backend
+        env:
+          PRODUCTION_API_URL: ${{ secrets.PRODUCTION_API_URL }}
+        run: |
+          echo "🕐 Running E2E tests at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "📍 Market closes in ~30 minutes (16:00 ET)"
+          pytest tests/test_production_e2e.py -v --tb=short
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          if [ -n "${{ secrets.DISCORD_WEBHOOK_URL }}" ]; then
+            curl -H "Content-Type: application/json" \
+              -d '{"content": "🚨 **Grok Trade**: 閉場前E2Eテスト失敗\n時刻: '"$(date -u '+%Y-%m-%d %H:%M:%S UTC')"'\n詳細: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' \
+              "${{ secrets.DISCORD_WEBHOOK_URL }}"
+          fi
+
+      - name: Notify on success
+        if: success()
+        run: |
+          if [ -n "${{ secrets.DISCORD_WEBHOOK_URL }}" ]; then
+            curl -H "Content-Type: application/json" \
+              -d '{"content": "✅ **Grok Trade**: 閉場前E2Eテスト成功\n時刻: '"$(date -u '+%Y-%m-%d %H:%M:%S UTC')"'"}' \
+              "${{ secrets.DISCORD_WEBHOOK_URL }}"
+          fi
+        continue-on-error: true
 
   weekly-full-test:
     name: Weekly Full Test Suite
