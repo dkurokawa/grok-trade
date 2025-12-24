@@ -7,13 +7,27 @@ from sqlalchemy.orm import sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-# Railway の内部URL を外部接続用に変換（ローカル開発用）
-if DATABASE_URL and "railway.internal" in DATABASE_URL:
-    # Railway 内部からは変換不要
-    pass
+# Debug: Log database URL presence (not the actual URL for security)
+if DATABASE_URL:
+    print(f"[DB] DATABASE_URL is set (length: {len(DATABASE_URL)}, starts with: {DATABASE_URL[:20]}...)")
+else:
+    print("[DB] WARNING: DATABASE_URL is not set!")
 
-engine = create_engine(DATABASE_URL) if DATABASE_URL else None
-SessionLocal = sessionmaker(bind=engine) if engine else None
+# Railway PostgreSQL uses postgres:// but SQLAlchemy requires postgresql://
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    print("[DB] Converted postgres:// to postgresql://")
+
+engine = None
+SessionLocal = None
+
+if DATABASE_URL:
+    try:
+        engine = create_engine(DATABASE_URL)
+        SessionLocal = sessionmaker(bind=engine)
+        print("[DB] Engine created successfully")
+    except Exception as e:
+        print(f"[DB] ERROR creating engine: {e}")
 Base = declarative_base()
 
 
@@ -69,8 +83,13 @@ class SystemState(Base):
 def init_db():
     """テーブル作成"""
     if engine:
-        Base.metadata.create_all(engine)
-        print("[DB] Tables created")
+        try:
+            Base.metadata.create_all(engine)
+            print("[DB] Tables created successfully")
+        except Exception as e:
+            print(f"[DB] ERROR creating tables: {e}")
+    else:
+        print("[DB] WARNING: Cannot initialize DB - engine is None")
 
 
 def get_session():
