@@ -10,6 +10,16 @@ __pycache__/
 .venv/
 venv/
 .Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+coverage.xml
+test-results.xml
+e2e-results.xml
+htmlcov/
 
 # Node
 node_modules/
@@ -29,6 +39,7 @@ Thumbs.db
 *.log
 logs/
 
-# Unrelated files
+# Project-specific (untracked working files)
 products/
-grok sample
+_refs/
+sql/
