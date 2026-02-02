@@ -1,4 +1,4 @@
-app = 'grok-trade'
+app = 'grok-trade-bot'
 primary_region = 'nrt'  # Tokyo
 
 [build]

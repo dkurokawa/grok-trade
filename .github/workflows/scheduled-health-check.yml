@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  PRODUCTION_URL: https://grok-trade.fly.dev
+  PRODUCTION_URL: https://grok-trade-bot.fly.dev
   DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_ALERTS }}
 
 jobs:

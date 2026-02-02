@@ -15,7 +15,7 @@ env:
   GROK_API_KEY: test_grok_key
   MAX_DAILY_LOSS: "500"
   MAX_POSITION_RATIO: "0.5"
-  FLY_APP_NAME: grok-trade
+  FLY_APP_NAME: grok-trade-bot
 
 jobs:
   # ===========================================
@@ -248,7 +248,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment:
       name: production
-      url: https://grok-trade.fly.dev
+      url: https://grok-trade-bot.fly.dev
 
     steps:
       - uses: actions/checkout@v4
@@ -274,12 +274,12 @@ jobs:
             MAX_POSITION_RATIO="${{ secrets.MAX_POSITION_RATIO }}" \
             TRADING_INTERVAL="${{ secrets.TRADING_INTERVAL }}" \
             TZ="America/New_York" \
-            --app grok-trade || true
+            --app grok-trade-bot || true
 
           # デプロイ
-          flyctl deploy --app grok-trade --remote-only --wait-timeout 300
+          flyctl deploy --app grok-trade-bot --remote-only --wait-timeout 300
 
-          echo "Production deployed to: https://grok-trade.fly.dev"
+          echo "Production deployed to: https://grok-trade-bot.fly.dev"
 
       - name: Notify Discord
         if: success()
@@ -288,7 +288,7 @@ jobs:
         run: |
           if [ -n "$DISCORD_WEBHOOK" ]; then
             curl -H "Content-Type: application/json" \
-              -d "{\"content\": \"✅ **Grok Trade**: 本番デプロイ完了\\nCommit: ${{ github.sha }}\\nURL: https://grok-trade.fly.dev\"}" \
+              -d "{\"content\": \"✅ **Grok Trade**: 本番デプロイ完了\\nCommit: ${{ github.sha }}\\nURL: https://grok-trade-bot.fly.dev\"}" \
               "$DISCORD_WEBHOOK"
           fi
         continue-on-error: true
@@ -320,7 +320,7 @@ jobs:
 
       - name: Wait for Production to be ready
         run: |
-          PROD_URL="https://grok-trade.fly.dev"
+          PROD_URL="https://grok-trade-bot.fly.dev"
           echo "Waiting for ${PROD_URL}/health..."
           for i in {1..30}; do
             if curl -sf "${PROD_URL}/health" | grep -q "ok"; then
@@ -336,7 +336,7 @@ jobs:
       - name: Run E2E Tests
         working-directory: backend
         env:
-          PRODUCTION_API_URL: https://grok-trade.fly.dev
+          PRODUCTION_API_URL: https://grok-trade-bot.fly.dev
         run: |
           pytest tests/test_production_e2e.py -v --tb=short
 
