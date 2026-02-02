@@ -260,15 +260,30 @@ jobs:
           PREVIEW_URL: ${{ needs.deploy-preview.outputs.url }}
         run: |
           echo "Testing endpoints..."
-          HEALTH=$(curl -sf "$PREVIEW_URL/health" && echo "✅" || echo "❌")
-          STATUS=$(curl -sf "$PREVIEW_URL/status" && echo "✅" || echo "❌")
-          TRADES=$(curl -sf "$PREVIEW_URL/trades" && echo "✅" || echo "❌")
-          DECISIONS=$(curl -sf "$PREVIEW_URL/decisions" && echo "✅" || echo "❌")
+          # Only output emoji status, not the full response (to avoid breaking JS)
+          if curl -sf "$PREVIEW_URL/health" > /dev/null 2>&1; then
+            echo "health=✅" >> $GITHUB_OUTPUT
+          else
+            echo "health=❌" >> $GITHUB_OUTPUT
+          fi
 
-          echo "health=$HEALTH" >> $GITHUB_OUTPUT
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
-          echo "trades=$TRADES" >> $GITHUB_OUTPUT
-          echo "decisions=$DECISIONS" >> $GITHUB_OUTPUT
+          if curl -sf "$PREVIEW_URL/status" > /dev/null 2>&1; then
+            echo "status=✅" >> $GITHUB_OUTPUT
+          else
+            echo "status=❌" >> $GITHUB_OUTPUT
+          fi
+
+          if curl -sf "$PREVIEW_URL/trades" > /dev/null 2>&1; then
+            echo "trades=✅" >> $GITHUB_OUTPUT
+          else
+            echo "trades=❌" >> $GITHUB_OUTPUT
+          fi
+
+          if curl -sf "$PREVIEW_URL/decisions" > /dev/null 2>&1; then
+            echo "decisions=✅" >> $GITHUB_OUTPUT
+          else
+            echo "decisions=❌" >> $GITHUB_OUTPUT
+          fi
 
       - name: Update PR comment with test results
         uses: actions/github-script@v7
