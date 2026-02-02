@@ -230,3 +230,206 @@ class TestProductionSmokeTest:
                 all_passed = False
 
         assert all_passed, "Some endpoints failed smoke test"
+
+
+class TestProductionSchedulerControl:
+    """Production scheduler control tests"""
+
+    @pytest.fixture
+    def client(self):
+        return httpx.Client(timeout=30.0)
+
+    def test_scheduler_status_in_health(self, client):
+        """Test scheduler status is reported in health endpoint"""
+        response = client.get(f"{PRODUCTION_URL}/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert "scheduler_running" in data
+        assert isinstance(data["scheduler_running"], bool)
+
+    def test_scheduler_status_in_status(self, client):
+        """Test scheduler status is reported in status endpoint"""
+        response = client.get(f"{PRODUCTION_URL}/status")
+        assert response.status_code == 200
+        data = response.json()
+        assert "scheduler_running" in data
+
+
+class TestProductionAccountData:
+    """Production account data validation tests"""
+
+    @pytest.fixture
+    def client(self):
+        return httpx.Client(timeout=30.0)
+
+    def test_account_has_required_fields(self, client):
+        """Test account data has all required fields"""
+        response = client.get(f"{PRODUCTION_URL}/status")
+        assert response.status_code == 200
+        data = response.json()
+
+        account = data.get("account", {})
+        required_fields = ["cash", "portfolio_value", "buying_power", "equity", "daily_pnl"]
+
+        for field in required_fields:
+            assert field in account, f"Missing account field: {field}"
+
+    def test_account_values_are_numeric(self, client):
+        """Test account values are numeric types"""
+        response = client.get(f"{PRODUCTION_URL}/status")
+        data = response.json()
+
+        account = data.get("account", {})
+        for key, value in account.items():
+            if key in ["cash", "portfolio_value", "buying_power", "equity", "daily_pnl"]:
+                assert isinstance(value, (int, float)), f"{key} should be numeric"
+
+    def test_positions_are_list(self, client):
+        """Test positions is a list"""
+        response = client.get(f"{PRODUCTION_URL}/status")
+        data = response.json()
+
+        assert "positions" in data
+        assert isinstance(data["positions"], list)
+
+
+class TestProductionTradeHistory:
+    """Production trade history tests"""
+
+    @pytest.fixture
+    def client(self):
+        return httpx.Client(timeout=30.0)
+
+    def test_trades_structure(self, client):
+        """Test trades response structure"""
+        response = client.get(f"{PRODUCTION_URL}/trades?limit=10")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "trades" in data
+        if len(data["trades"]) > 0:
+            trade = data["trades"][0]
+            expected_fields = ["id", "timestamp", "symbol", "action", "quantity", "price"]
+            for field in expected_fields:
+                assert field in trade, f"Missing trade field: {field}"
+
+    def test_decisions_structure(self, client):
+        """Test decisions response structure"""
+        response = client.get(f"{PRODUCTION_URL}/decisions?limit=10")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "decisions" in data
+        if len(data["decisions"]) > 0:
+            decision = data["decisions"][0]
+            expected_fields = ["id", "timestamp", "parsed_action", "executed"]
+            for field in expected_fields:
+                assert field in decision, f"Missing decision field: {field}"
+
+    def test_trades_limit_works(self, client):
+        """Test trades limit parameter works correctly"""
+        response1 = client.get(f"{PRODUCTION_URL}/trades?limit=1")
+        response2 = client.get(f"{PRODUCTION_URL}/trades?limit=5")
+
+        assert response1.status_code == 200
+        assert response2.status_code == 200
+
+        data1 = response1.json()
+        data2 = response2.json()
+
+        assert len(data1["trades"]) <= 1
+        assert len(data2["trades"]) <= 5
+
+
+class TestProductionPerformance:
+    """Production performance tests"""
+
+    @pytest.fixture
+    def client(self):
+        return httpx.Client(timeout=30.0)
+
+    def test_health_response_time_under_1s(self, client):
+        """Test health endpoint responds under 1 second"""
+        import time
+        start = time.time()
+        response = client.get(f"{PRODUCTION_URL}/health")
+        elapsed = time.time() - start
+
+        assert response.status_code == 200
+        assert elapsed < 1.0, f"Health check too slow: {elapsed:.2f}s"
+
+    def test_status_response_time_under_5s(self, client):
+        """Test status endpoint responds under 5 seconds"""
+        import time
+        start = time.time()
+        response = client.get(f"{PRODUCTION_URL}/status")
+        elapsed = time.time() - start
+
+        assert response.status_code == 200
+        assert elapsed < 5.0, f"Status check too slow: {elapsed:.2f}s"
+
+    def test_trades_response_time_under_5s(self, client):
+        """Test trades endpoint responds under 5 seconds"""
+        import time
+        start = time.time()
+        response = client.get(f"{PRODUCTION_URL}/trades?limit=50")
+        elapsed = time.time() - start
+
+        assert response.status_code == 200
+        assert elapsed < 5.0, f"Trades fetch too slow: {elapsed:.2f}s"
+
+
+class TestProductionResilience:
+    """Production resilience and stability tests"""
+
+    @pytest.fixture
+    def client(self):
+        return httpx.Client(timeout=30.0)
+
+    def test_multiple_rapid_requests(self, client):
+        """Test system handles multiple rapid requests"""
+        results = []
+        for _ in range(5):
+            response = client.get(f"{PRODUCTION_URL}/health")
+            results.append(response.status_code)
+
+        assert all(status == 200 for status in results), "Some rapid requests failed"
+
+    def test_large_limit_parameter(self, client):
+        """Test system handles large limit parameter"""
+        response = client.get(f"{PRODUCTION_URL}/trades?limit=1000")
+        assert response.status_code == 200
+
+    def test_concurrent_endpoints(self, client):
+        """Test accessing different endpoints in sequence"""
+        endpoints = ["/health", "/status", "/trades", "/decisions", "/health"]
+        for endpoint in endpoints:
+            response = client.get(f"{PRODUCTION_URL}{endpoint}")
+            assert response.status_code == 200, f"Failed on {endpoint}"
+
+
+class TestProductionDebugEndpoint:
+    """Production debug endpoint tests"""
+
+    @pytest.fixture
+    def client(self):
+        return httpx.Client(timeout=30.0)
+
+    def test_debug_db_endpoint_exists(self, client):
+        """Test debug/db endpoint exists and responds"""
+        response = client.get(f"{PRODUCTION_URL}/debug/db")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should have database status info
+        assert "database_url_set" in data
+        assert "engine_exists" in data
+
+    def test_debug_db_shows_connected(self, client):
+        """Test debug/db shows database is configured"""
+        response = client.get(f"{PRODUCTION_URL}/debug/db")
+        data = response.json()
+
+        # In production, database should be configured
+        assert data["database_url_set"] is True
+        assert data["engine_exists"] is True

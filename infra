@@ -5,7 +5,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  Railway                                              │
+│  Fly.io                                              │
 │  ┌──────────────────────────────────────────────┐   │
 │  │  Main Service (Python)                        │   │
 │  │                                               │   │
@@ -31,7 +31,7 @@
 │  └────────────────────┼─────────────────────────┘   │
 │                       │                             │
 │  ┌────────────────────▼─────────────────────────┐   │
-│  │  PostgreSQL (Railway addon)                   │   │
+│  │  PostgreSQL (Fly Postgres)                    │   │
 │  │  - 取引ログ / 思考ログ / 設定                 │   │
 │  └───────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────┘
@@ -64,30 +64,44 @@
 | 発注 | Alpaca MCP Server |
 | Backend | Python（MCP Serverとの相性） |
 | Scheduler | APScheduler |
-| Hosting | Railway |
-| DB | Railway PostgreSQL |
+| Hosting | Fly.io |
+| DB | Fly Postgres |
 | Dashboard | Next.js on Vercel |
 | 通知 | Discord Webhook |
 
 ---
 
-### Railway構成
+### Fly.io構成
 
-```yaml
-# railway.toml
-[build]
-builder = "nixpacks"
+```toml
+# fly.toml
+app = 'grok-trade-bot'
+primary_region = 'nrt'  # Tokyo
 
-[deploy]
-startCommand = "python main.py"
-healthcheckPath = "/health"
-restartPolicyType = "always"
+[env]
+  PORT = '8080'
+  TZ = 'America/New_York'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'  # 常時起動
+  min_machines_running = 1
+
+[[http_service.checks]]
+  path = '/health'
+  interval = '30s'
+  timeout = '10s'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
 ```
 
 **サービス構成：**
 - Main Service: 1つ（Python常駐プロセス）
-- PostgreSQL: Railway addon
-- 環境変数: ダッシュボードで設定
+- PostgreSQL: Fly Postgres (`grok-trade-db`)
+- 環境変数: `flyctl secrets set` で設定
 
 ---
 
@@ -103,7 +117,7 @@ ALPACA_PAPER=true  # 本番時はfalse
 GROK_API_KEY=xxx
 
 # Database
-DATABASE_URL=postgres://...  # Railway自動設定
+DATABASE_URL=postgres://...  # Fly Postgres
 
 # Discord
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
@@ -230,7 +244,7 @@ Grok: "AAPLの来週金曜満期、現在価格+5%のコールを買って"
 | 市場オープン | 9:30 | 23:30 |
 | 市場クローズ | 16:00 | 6:00 |
 
-Railway環境変数に`TZ=America/New_York`設定。
+Fly.io環境変数に`TZ=America/New_York`設定。
 
 #### 5. レート制限
 
@@ -279,7 +293,7 @@ Railway環境変数に`TZ=America/New_York`設定。
 ```
 
 - ダッシュボードの停止ボタン → `system_state`テーブル更新
-- Discord通知 → 手動でRailway停止
+- Discord通知 → 手動でFly.io停止
 - 損失上限到達 → 自動停止
 
 ---
@@ -288,13 +302,13 @@ Railway環境変数に`TZ=America/New_York`設定。
 
 | 項目 | 月額 |
 |------|------|
-| Railway Hobby | $5 |
-| Railway PostgreSQL | $5〜 |
+| Fly.io (shared-cpu-1x) | ~$5 |
+| Fly Postgres | $0〜（無料枠内） |
 | Grok API | $10-30（使用量次第） |
 | Alpaca | $0 |
 | Vercel | $0（Hobby） |
 | Discord | $0 |
-| **合計** | **$20-40/月** |
+| **合計** | **$15-35/月** |
 
 ---
 
@@ -303,7 +317,7 @@ Railway環境変数に`TZ=America/New_York`設定。
 ```
 Week 1: 基盤
 ├─ Alpaca口座開設（ペーパー）
-├─ Railway環境構築
+├─ Fly.io環境構築
 ├─ MCP Server動作確認
 └─ 「SPY 1株買う」が通る状態
 
@@ -316,7 +330,7 @@ Week 2-3: コア
 
 Week 4: ダッシュボード
 ├─ Vercel + Next.js
-├─ Railway PostgreSQL接続
+├─ Fly Postgres接続
 ├─ P&L表示
 └─ 停止ボタン
 
