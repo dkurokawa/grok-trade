@@ -80,19 +80,36 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov
 
-      - name: Run all tests
+      - name: Run unit tests
         working-directory: backend
         run: |
           pytest tests/ \
             --ignore=tests/test_production_e2e.py \
             -v --tb=short \
-            --cov=. --cov-report=xml --cov-report=term-missing
+            --cov=. --cov-report=xml --cov-report=term-missing \
+            --cov-fail-under=60 \
+            --junitxml=test-results.xml
+
+      - name: Test Summary
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: backend/test-results.xml
+        continue-on-error: true
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:
           files: backend/coverage.xml
           fail_ci_if_error: false
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: backend/test-results.xml
+          retention-days: 7
 
   # ===========================================
   # Step 3: Deploy Preview (PRのみ)
@@ -241,7 +258,7 @@ jobs:
           PRODUCTION_API_URL: ${{ needs.deploy-preview.outputs.url }}
         run: |
           set +e
-          pytest tests/test_production_e2e.py -v --tb=short --junitxml=test-results.xml 2>&1 | tee e2e-output.txt
+          pytest tests/test_production_e2e.py -v --tb=short --junitxml=e2e-results.xml 2>&1 | tee e2e-output.txt
           EXIT_CODE=$?
           echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
 
@@ -253,6 +270,14 @@ jobs:
 
           exit $EXIT_CODE
         continue-on-error: true
+
+      - name: Upload E2E test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-preview-results
+          path: backend/e2e-results.xml
+          retention-days: 7
 
       - name: Test endpoints directly
         id: endpoints
@@ -444,7 +469,15 @@ jobs:
         env:
           PRODUCTION_API_URL: https://grok-trade-bot.fly.dev
         run: |
-          pytest tests/test_production_e2e.py -v --tb=short
+          pytest tests/test_production_e2e.py -v --tb=short --junitxml=e2e-production-results.xml
+
+      - name: Upload E2E production results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-production-results
+          path: backend/e2e-production-results.xml
+          retention-days: 7
 
       - name: Notify on failure
         if: failure()
