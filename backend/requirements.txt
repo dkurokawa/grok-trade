@@ -24,3 +24,6 @@ pytz>=2024.1
 # Server
 uvicorn>=0.27.0
 fastapi>=0.109.0
+
+# Monitoring
+sentry-sdk[fastapi]>=2.0.0

@@ -1,5 +1,16 @@
 """Grok Trade Bot - メインエントリーポイント"""
 import os
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+# Sentry初期化（他のimportより前に実行）
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN"),
+    environment=os.environ.get("ENVIRONMENT", "development"),
+    traces_sample_rate=0.1,
+    integrations=[FastApiIntegration()],
+)
+
 import asyncio
 import json
 from datetime import datetime
