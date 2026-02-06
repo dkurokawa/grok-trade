@@ -1,4 +1,4 @@
-"""Grok Trade Bot - メインエントリーポイント"""
+"""Grok Trade Bot - Grok → Opus 4.6 → Alpaca パイプライン"""
 import os
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -13,26 +13,32 @@ sentry_sdk.init(
 
 import asyncio
 import json
+import uuid
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from grok_client import GrokClient
+from opus_client import OpusClient
+from grok_validator import validate_grok_report
+from skip_logic import should_skip_opus
 from risk_guard import RiskGuard
 from trader import Trader
 from discord_notifier import DiscordNotifier
-from db import Trade, Decision, SystemState, init_db, get_session
+from db import Trade, Decision, PipelineLog, SystemState, init_db, get_session
 
 
 # グローバルインスタンス
 grok = GrokClient()
+opus = OpusClient()
 guard = RiskGuard()
 trader = Trader()
 notifier = DiscordNotifier()
@@ -42,43 +48,76 @@ scheduler = AsyncIOScheduler(timezone="America/New_York")
 WATCHLIST = ["MSTR", "TSLA", "QQQ", "SPY"]
 
 
-def log_decision(market_context: dict, grok_response: str, parsed_action: dict, executed: bool, blocked_reason: str = None):
-    """Grokの判断をDBに記録"""
+def log_pipeline(
+    cycle_id: str,
+    grok_input: dict = None,
+    grok_output: dict = None,
+    grok_latency_ms: int = None,
+    opus_skipped: bool = False,
+    opus_input: dict = None,
+    opus_output: dict = None,
+    opus_latency_ms: int = None,
+    opus_adjustments: list = None,
+    rg_passed: bool = None,
+    rg_reason: str = None,
+    rg_adjustments: list = None,
+    order_submitted: bool = False,
+    alpaca_order_id: str = None,
+    execution_result: dict = None,
+):
+    """パイプライン全体をDBに記録"""
     session = get_session()
     if not session:
         return
     try:
-        decision = Decision(
-            market_context=market_context,
-            grok_response=grok_response,
-            parsed_action=parsed_action,
-            executed=executed,
-            blocked_reason=blocked_reason
+        log = PipelineLog(
+            cycle_id=cycle_id,
+            grok_input=grok_input,
+            grok_output=grok_output,
+            grok_latency_ms=grok_latency_ms,
+            opus_skipped=opus_skipped,
+            opus_input=opus_input,
+            opus_output=opus_output,
+            opus_latency_ms=opus_latency_ms,
+            opus_adjustments=opus_adjustments or [],
+            risk_guard_passed=rg_passed,
+            risk_guard_reason=rg_reason,
+            risk_guard_adjustments=rg_adjustments or [],
+            order_submitted=order_submitted,
+            alpaca_order_id=alpaca_order_id,
+            execution_result=execution_result,
         )
-        session.add(decision)
+        session.add(log)
         session.commit()
-        print("[DB] Decision logged")
+        print(f"[DB] Pipeline log saved: {cycle_id[:8]}")
     except Exception as e:
-        print(f"[DB] Error logging decision: {e}")
+        print(f"[DB] Error logging pipeline: {e}")
         session.rollback()
     finally:
         session.close()
 
 
-def log_trade(symbol: str, action: str, quantity: float, price: float, order_type: str, status: str, alpaca_order_id: str):
+def log_trade(
+    cycle_id: str, symbol: str, action: str, quantity: float,
+    price: float, order_type: str, status: str, alpaca_order_id: str,
+    stop_loss: float = None, take_profit: float = None,
+):
     """取引をDBに記録"""
     session = get_session()
     if not session:
         return
     try:
         trade = Trade(
+            cycle_id=cycle_id,
             symbol=symbol,
             action=action,
             quantity=quantity,
             price=price,
             order_type=order_type,
             status=status,
-            alpaca_order_id=alpaca_order_id
+            alpaca_order_id=alpaca_order_id,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
         )
         session.add(trade)
         session.commit()
@@ -94,7 +133,7 @@ def get_scheduler_state() -> bool:
     """DB からスケジューラー状態を取得"""
     session = get_session()
     if not session:
-        return True  # デフォルトは起動
+        return True
     try:
         state = session.query(SystemState).filter_by(key="scheduler_running").first()
         if state:
@@ -121,7 +160,6 @@ def set_scheduler_state(running: bool):
             state = SystemState(key="scheduler_running", value={"running": running})
             session.add(state)
         session.commit()
-        print(f"[DB] Scheduler state saved: {running}")
     except Exception as e:
         print(f"[DB] Error setting scheduler state: {e}")
         session.rollback()
@@ -130,22 +168,21 @@ def set_scheduler_state(running: bool):
 
 
 async def trading_cycle():
-    """メイン取引サイクル（15分ごと）"""
+    """メイン取引サイクル（30分ごと・4ステージパイプライン）"""
+    cycle_id = str(uuid.uuid4())
     print(f"\n{'='*50}")
-    print(f"[{datetime.now()}] Trading cycle started")
-    print('='*50)
+    print(f"[{datetime.now()}] Cycle {cycle_id[:8]} started")
+    print("=" * 50)
 
     try:
-        # 1. アカウント情報取得
+        # === アカウント・市場データ取得 ===
         account = trader.get_account()
         positions = trader.get_positions()
         daily_pnl = account["daily_pnl"]
 
-        print(f"Cash: ${account['cash']:,.2f}")
-        print(f"Daily P&L: ${daily_pnl:+,.2f}")
-        print(f"Positions: {len(positions)}")
+        print(f"Cash: ${account['cash']:,.2f} | Daily P&L: ${daily_pnl:+,.2f} | Positions: {len(positions)}")
 
-        # 2. システム健全性チェック
+        # システム健全性チェック
         health = guard.check_system_health(daily_pnl)
         if not health.allowed:
             print(f"[RiskGuard] System stopped: {health.reason}")
@@ -153,118 +190,195 @@ async def trading_cycle():
             scheduler.pause()
             return
 
-        # 3. 市場データ取得
         market_data = trader.get_market_data(WATCHLIST)
         if not market_data:
             print("[Trader] No market data available")
             return
 
-        print(f"Market data: {list(market_data.keys())}")
+        # === Stage 1: Grok 情報収集 ===
+        grok_report, grok_latency = grok.collect_market_report(
+            market_data=market_data,
+            positions=positions,
+        )
 
-        # 4. Grok分析
-        decision = grok.analyze_market(
+        if not grok_report:
+            print("[Grok] No report returned")
+            return
+
+        grok_report = validate_grok_report(grok_report)
+        try:
+            await notifier.send_pipeline_log(cycle_id, "grok", grok_report)
+        except Exception as e:
+            print(f"[Discord] Grok log failed: {e}")
+
+        print(f"[Grok] Sentiment: {grok_report['sentiment']['overall']} | "
+              f"Change: {grok_report['significant_change']} | "
+              f"Latency: {grok_latency}ms")
+
+        # === Opusスキップ判定 ===
+        if should_skip_opus(grok_report):
+            print("[Skip] No significant change → Opus skipped")
+            try:
+                await notifier.send_pipeline_log(cycle_id, "skip", {})
+            except Exception as e:
+                print(f"[Discord] Skip log failed: {e}")
+            log_pipeline(
+                cycle_id=cycle_id,
+                grok_input={"market_data": market_data},
+                grok_output=grok_report,
+                grok_latency_ms=grok_latency,
+                opus_skipped=True,
+            )
+            return
+
+        # === Stage 2: Opus 4.6 判断 ===
+        max_daily_loss = guard.max_daily_loss
+        decision, opus_latency = opus.analyze(
             balance=account["cash"],
             positions=positions,
-            market_data=market_data
+            daily_pnl=daily_pnl,
+            max_daily_loss=max_daily_loss,
+            price_data=market_data,
+            grok_report=grok_report,
         )
 
         if not decision:
-            print("[Grok] No decision returned")
+            print("[Opus] No decision returned")
+            log_pipeline(
+                cycle_id=cycle_id,
+                grok_input={"market_data": market_data},
+                grok_output=grok_report,
+                grok_latency_ms=grok_latency,
+                opus_latency_ms=opus_latency,
+            )
             return
 
-        print(f"[Grok] Decision: {decision['action']} {decision['symbol']} x{decision['quantity']}")
-        print(f"[Grok] Confidence: {decision['confidence']}%")
-        print(f"[Grok] Reasoning: {decision['reasoning']}")
+        try:
+            await notifier.send_pipeline_log(cycle_id, "opus_decision", decision)
+        except Exception as e:
+            print(f"[Discord] Opus log failed: {e}")
 
-        # 5. Hold なら終了
+        print(f"[Opus] {decision['action'].upper()} {decision.get('symbol', '')} | "
+              f"Confidence: {decision['confidence']}% | "
+              f"Size: {decision.get('position_size_pct', 0)}% | "
+              f"Latency: {opus_latency}ms")
+
+        # === Stage 3: Risk Guard ===
+        portfolio = {"daily_pnl": daily_pnl}
+        rg_result = guard.check(decision, portfolio)
+
+        if rg_result.adjustments:
+            try:
+                await notifier.send_pipeline_log(cycle_id, "risk_guard", {
+                    "passed": True, "adjustments": rg_result.adjustments,
+                })
+            except Exception as e:
+                print(f"[Discord] RiskGuard adjustment log failed: {e}")
+            print(f"[RiskGuard] Adjustments: {len(rg_result.adjustments)}")
+
+        if not rg_result.allowed:
+            try:
+                await notifier.send_pipeline_log(cycle_id, "risk_guard", {
+                    "passed": False, "reason": rg_result.reason,
+                })
+            except Exception as e:
+                print(f"[Discord] RiskGuard block log failed: {e}")
+            print(f"[RiskGuard] BLOCKED: {rg_result.reason}")
+            log_pipeline(
+                cycle_id=cycle_id,
+                grok_input={"market_data": market_data},
+                grok_output=grok_report,
+                grok_latency_ms=grok_latency,
+                opus_output=decision,
+                opus_latency_ms=opus_latency,
+                opus_adjustments=decision.get("adjustments", []),
+                rg_passed=False,
+                rg_reason=rg_result.reason,
+                rg_adjustments=rg_result.adjustments,
+            )
+            return
+
+        # === Stage 4: Execute ===
         if decision["action"] == "hold":
             print("[Action] Hold - no trade")
-            # DBに決定を記録
-            log_decision(
-                market_context={"positions": positions, "market_data": market_data},
-                grok_response=json.dumps(decision),
-                parsed_action=decision,
-                executed=False,
-                blocked_reason="hold"
+            log_pipeline(
+                cycle_id=cycle_id,
+                grok_input={"market_data": market_data},
+                grok_output=grok_report,
+                grok_latency_ms=grok_latency,
+                opus_output=decision,
+                opus_latency_ms=opus_latency,
+                opus_adjustments=decision.get("adjustments", []),
+                rg_passed=True,
+                rg_reason="hold",
+                rg_adjustments=rg_result.adjustments,
             )
             return
 
-        # 6. 価格取得（リスクチェック用）
         symbol = decision["symbol"]
         price = market_data.get(symbol, {}).get("price", 0)
-        if price == 0:
-            print(f"[Error] No price for {symbol}")
-            return
-
-        # 7. リスクチェック
-        risk_check = guard.check_order(
-            action=decision["action"],
-            symbol=symbol,
-            quantity=decision["quantity"],
-            price=price,
-            account_balance=account["cash"],
-            current_positions=positions,
-            daily_pnl=daily_pnl
-        )
-
-        if not risk_check.allowed:
-            print(f"[RiskGuard] Order blocked: {risk_check.reason}")
-            await notifier.notify_alert(f"Order blocked: {risk_check.reason}", "warning")
-            # DBに決定を記録
-            log_decision(
-                market_context={"positions": positions, "market_data": market_data},
-                grok_response=json.dumps(decision),
-                parsed_action=decision,
-                executed=False,
-                blocked_reason=risk_check.reason
-            )
-            return
-
-        # 8. 注文実行
-        print(f"[Execute] {decision['action'].upper()} {symbol} x{decision['quantity']}")
 
         order = trader.execute_order(
             symbol=symbol,
             action=decision["action"],
             quantity=decision["quantity"],
-            order_type=decision.get("order_type", "market")
+            order_type=decision.get("order_type", "market"),
+            limit_price=decision.get("limit_price"),
+            stop_loss=decision.get("stop_loss"),
+            take_profit=decision.get("take_profit"),
         )
 
         if order:
-            print(f"[Order] ID: {order['order_id']}, Status: {order['status']}")
-            await notifier.notify_trade(
-                symbol=symbol,
-                action=decision["action"],
-                quantity=decision["quantity"],
-                price=price
-            )
-            # DBに取引と決定を記録
+            exec_result = {
+                "alpaca_order_id": order["order_id"],
+                "status": order["status"],
+            }
+            try:
+                await notifier.send_pipeline_log(cycle_id, "execution", exec_result)
+            except Exception as e:
+                print(f"[Discord] Execution log failed: {e}")
+            print(f"[Order] {order['order_id']} | Status: {order['status']}")
+
             log_trade(
+                cycle_id=cycle_id,
                 symbol=symbol,
                 action=decision["action"],
                 quantity=decision["quantity"],
                 price=price,
                 order_type=decision.get("order_type", "market"),
                 status=order["status"],
-                alpaca_order_id=order["order_id"]
+                alpaca_order_id=order["order_id"],
+                stop_loss=decision.get("stop_loss"),
+                take_profit=decision.get("take_profit"),
             )
-            log_decision(
-                market_context={"positions": positions, "market_data": market_data},
-                grok_response=json.dumps(decision),
-                parsed_action=decision,
-                executed=True,
-                blocked_reason=None
+            log_pipeline(
+                cycle_id=cycle_id,
+                grok_input={"market_data": market_data},
+                grok_output=grok_report,
+                grok_latency_ms=grok_latency,
+                opus_output=decision,
+                opus_latency_ms=opus_latency,
+                opus_adjustments=decision.get("adjustments", []),
+                rg_passed=True,
+                rg_adjustments=rg_result.adjustments,
+                order_submitted=True,
+                alpaca_order_id=order["order_id"],
+                execution_result=exec_result,
             )
         else:
             print("[Order] Failed to execute")
             await notifier.notify_alert(f"Order failed: {symbol}", "error")
-            # DBに失敗した決定を記録
-            log_decision(
-                market_context={"positions": positions, "market_data": market_data},
-                grok_response=json.dumps(decision),
-                parsed_action=decision,
-                executed=False,
-                blocked_reason="order_execution_failed"
+            log_pipeline(
+                cycle_id=cycle_id,
+                grok_input={"market_data": market_data},
+                grok_output=grok_report,
+                grok_latency_ms=grok_latency,
+                opus_output=decision,
+                opus_latency_ms=opus_latency,
+                opus_adjustments=decision.get("adjustments", []),
+                rg_passed=True,
+                rg_adjustments=rg_result.adjustments,
+                order_submitted=False,
             )
 
     except Exception as e:
@@ -272,21 +386,72 @@ async def trading_cycle():
         await notifier.notify_alert(f"Trading error: {e}", "error")
 
 
+async def emergency_check():
+    """5分間隔でドローダウン監視（AI不要）"""
+    try:
+        account = trader.get_account()
+        equity = account["equity"]
+        last_equity = account["last_equity"]
+
+        if last_equity > 0:
+            drawdown_pct = ((last_equity - equity) / last_equity) * 100
+            if drawdown_pct > 5:
+                print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5% → liquidating")
+                results = trader.execute_emergency_liquidation()
+                await notifier.send_pipeline_log("EMERGENCY", "risk_guard", {
+                    "passed": False,
+                    "reason": f"EMERGENCY STOP: drawdown {drawdown_pct:.1f}%",
+                })
+                scheduler.pause()
+                set_scheduler_state(False)
+    except Exception as e:
+        print(f"[Emergency] Check failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """アプリケーションライフサイクル"""
-    # DB初期化
     init_db()
 
-    # 起動時
-    interval = int(os.getenv("TRADING_INTERVAL", "900"))  # デフォルト15分
-
+    # 30分間隔（市場時間のみ：月-金 9:00-15:30 EST）
     scheduler.add_job(
         trading_cycle,
-        IntervalTrigger(seconds=interval),
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="9-15",
+            minute="0,30",
+            timezone="America/New_York",
+        ),
         id="trading_cycle",
-        name="Main trading cycle"
+        name="Main trading cycle",
     )
+
+    # 最後の判断（15:30）
+    scheduler.add_job(
+        trading_cycle,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="15",
+            minute="30",
+            timezone="America/New_York",
+        ),
+        id="trading_cycle_close",
+        name="Market close trading cycle",
+    )
+
+    # 緊急チェック（5分間隔、市場時間のみ）
+    scheduler.add_job(
+        emergency_check,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="9-15",
+            minute="*/5",
+            timezone="America/New_York",
+        ),
+        id="emergency_check",
+        name="Emergency drawdown check",
+    )
+
     scheduler.start()
 
     # 前回の状態を復元
@@ -294,22 +459,18 @@ async def lifespan(app: FastAPI):
         print("[DB] Restoring paused state from previous session")
         scheduler.pause()
     else:
-        print(f"🚀 Grok Trade Bot started (interval: {interval}s)")
-        await notifier.notify_alert("🚀 Grok Trade Bot started!", "info")
-        # 初回実行
-        await trading_cycle()
+        print("Grok → Opus 4.6 → Alpaca pipeline started (30min cron)")
+        await notifier.notify_alert("Grok → Opus pipeline started!", "info")
 
     yield
 
-    # 終了時
     scheduler.shutdown()
     print("Bot stopped")
 
 
-# FastAPIアプリ（ヘルスチェック用）
+# FastAPIアプリ
 app = FastAPI(lifespan=lifespan)
 
-# CORS設定（Dashboard からのアクセスを許可）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 本番では Vercel URL に限定推奨
@@ -324,7 +485,7 @@ async def health():
     return {
         "status": "ok",
         "scheduler_running": scheduler.running,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
     }
 
 
@@ -335,7 +496,7 @@ async def status():
     return {
         "account": account,
         "positions": positions,
-        "scheduler_running": scheduler.running
+        "scheduler_running": scheduler.running,
     }
 
 
@@ -353,7 +514,7 @@ async def start():
     """再開"""
     scheduler.resume()
     set_scheduler_state(True)
-    await notifier.notify_alert("🔄 Bot resumed", "info")
+    await notifier.notify_alert("Bot resumed", "info")
     return {"status": "running"}
 
 
@@ -370,13 +531,16 @@ async def get_trades(limit: int = 50):
                 {
                     "id": t.id,
                     "timestamp": t.timestamp.isoformat() if t.timestamp else None,
+                    "cycle_id": t.cycle_id,
                     "symbol": t.symbol,
                     "action": t.action,
                     "quantity": t.quantity,
                     "price": t.price,
                     "order_type": t.order_type,
                     "status": t.status,
-                    "alpaca_order_id": t.alpaca_order_id
+                    "alpaca_order_id": t.alpaca_order_id,
+                    "stop_loss": t.stop_loss,
+                    "take_profit": t.take_profit,
                 }
                 for t in trades
             ]
@@ -389,26 +553,65 @@ async def get_trades(limit: int = 50):
 
 @app.get("/decisions")
 async def get_decisions(limit: int = 50):
-    """Grok判断履歴取得"""
+    """パイプラインログ取得（pipeline_log 参照）"""
     session = get_session()
     if not session:
         return {"decisions": [], "error": "Database not available"}
     try:
-        decisions = session.query(Decision).order_by(Decision.timestamp.desc()).limit(limit).all()
+        logs = session.query(PipelineLog).order_by(PipelineLog.timestamp.desc()).limit(limit).all()
         return {
             "decisions": [
                 {
                     "id": d.id,
+                    "cycle_id": d.cycle_id,
                     "timestamp": d.timestamp.isoformat() if d.timestamp else None,
-                    "parsed_action": d.parsed_action,
-                    "executed": d.executed,
-                    "blocked_reason": d.blocked_reason
+                    "opus_skipped": d.opus_skipped,
+                    "opus_output": d.opus_output,
+                    "risk_guard_passed": d.risk_guard_passed,
+                    "risk_guard_reason": d.risk_guard_reason,
+                    "order_submitted": d.order_submitted,
                 }
-                for d in decisions
+                for d in logs
             ]
         }
     except Exception as e:
         return {"decisions": [], "error": str(e)}
+    finally:
+        session.close()
+
+
+@app.get("/pipeline")
+async def get_pipeline_logs(limit: int = 50):
+    """パイプライン全体ログ取得"""
+    session = get_session()
+    if not session:
+        return {"logs": [], "error": "Database not available"}
+    try:
+        logs = session.query(PipelineLog).order_by(PipelineLog.timestamp.desc()).limit(limit).all()
+        return {
+            "logs": [
+                {
+                    "id": d.id,
+                    "cycle_id": d.cycle_id,
+                    "timestamp": d.timestamp.isoformat() if d.timestamp else None,
+                    "grok_output": d.grok_output,
+                    "grok_latency_ms": d.grok_latency_ms,
+                    "opus_skipped": d.opus_skipped,
+                    "opus_output": d.opus_output,
+                    "opus_latency_ms": d.opus_latency_ms,
+                    "opus_adjustments": d.opus_adjustments,
+                    "risk_guard_passed": d.risk_guard_passed,
+                    "risk_guard_reason": d.risk_guard_reason,
+                    "risk_guard_adjustments": d.risk_guard_adjustments,
+                    "order_submitted": d.order_submitted,
+                    "alpaca_order_id": d.alpaca_order_id,
+                    "execution_result": d.execution_result,
+                }
+                for d in logs
+            ]
+        }
+    except Exception as e:
+        return {"logs": [], "error": str(e)}
     finally:
         session.close()
 

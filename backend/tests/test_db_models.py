@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 # Use in-memory SQLite for testing
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
-from db.models import Base, Trade, Decision, DailySummary, SystemState, init_db, get_session
+from db.models import Base, Trade, Decision, DailySummary, SystemState, PipelineLog, init_db, get_session
 
 
 class TestDatabaseConnection:
@@ -27,6 +27,7 @@ class TestDatabaseConnection:
         assert "decisions" in tables
         assert "daily_summary" in tables
         assert "system_state" in tables
+        assert "pipeline_log" in tables
 
     def test_get_session_returns_session(self):
         """Test get_session returns valid session"""
@@ -583,3 +584,174 @@ class TestDatabaseEdgeCases:
         # First trade should still be there
         trades = session.query(Trade).all()
         assert len(trades) >= 1
+
+
+class TestPipelineLogModel:
+    """PipelineLog model tests"""
+
+    @pytest.fixture
+    def session(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        yield session
+        session.close()
+
+    def test_create_pipeline_log(self, session):
+        """Test creating a pipeline log"""
+        log = PipelineLog(
+            cycle_id="test-cycle-123",
+            grok_input={"market_data": {"MSTR": {"price": 350}}},
+            grok_output={"sentiment": {"overall": 60}, "significant_change": True},
+            grok_latency_ms=120,
+        )
+        session.add(log)
+        session.commit()
+
+        assert log.id is not None
+        assert log.timestamp is not None
+        assert log.cycle_id == "test-cycle-123"
+
+    def test_pipeline_log_full_cycle(self, session):
+        """Test pipeline log with all stages populated"""
+        log = PipelineLog(
+            cycle_id="full-cycle-456",
+            grok_input={"market_data": {}},
+            grok_output={"sentiment": {"overall": 70}},
+            grok_latency_ms=100,
+            opus_skipped=False,
+            opus_input={"balance": 100000},
+            opus_output={"action": "buy", "symbol": "MSTR", "quantity": 10},
+            opus_latency_ms=800,
+            opus_adjustments=[],
+            risk_guard_passed=True,
+            risk_guard_reason=None,
+            risk_guard_adjustments=[],
+            order_submitted=True,
+            alpaca_order_id="order-abc",
+            execution_result={"status": "filled"},
+        )
+        session.add(log)
+        session.commit()
+
+        retrieved = session.query(PipelineLog).first()
+        assert retrieved.opus_output["action"] == "buy"
+        assert retrieved.order_submitted is True
+        assert retrieved.alpaca_order_id == "order-abc"
+
+    def test_pipeline_log_opus_skipped(self, session):
+        """Test pipeline log when Opus is skipped"""
+        log = PipelineLog(
+            cycle_id="skip-cycle-789",
+            grok_output={"sentiment": {"overall": 10}, "significant_change": False},
+            grok_latency_ms=80,
+            opus_skipped=True,
+        )
+        session.add(log)
+        session.commit()
+
+        retrieved = session.query(PipelineLog).first()
+        assert retrieved.opus_skipped is True
+        assert retrieved.opus_output is None
+        assert retrieved.order_submitted is False
+
+    def test_pipeline_log_risk_guard_blocked(self, session):
+        """Test pipeline log when Risk Guard blocks"""
+        log = PipelineLog(
+            cycle_id="blocked-cycle",
+            grok_output={"sentiment": {"overall": 50}},
+            grok_latency_ms=100,
+            opus_output={"action": "buy", "confidence": 35},
+            opus_latency_ms=600,
+            risk_guard_passed=False,
+            risk_guard_reason="confidence_too_low: 35",
+            risk_guard_adjustments=[],
+            order_submitted=False,
+        )
+        session.add(log)
+        session.commit()
+
+        retrieved = session.query(PipelineLog).first()
+        assert retrieved.risk_guard_passed is False
+        assert "confidence" in retrieved.risk_guard_reason
+
+    def test_pipeline_log_unique_cycle_id(self, session):
+        """Test cycle_id uniqueness"""
+        log1 = PipelineLog(cycle_id="unique-id", grok_latency_ms=100)
+        session.add(log1)
+        session.commit()
+
+        log2 = PipelineLog(cycle_id="unique-id", grok_latency_ms=200)
+        session.add(log2)
+
+        with pytest.raises(Exception):
+            session.commit()
+
+    def test_pipeline_log_with_adjustments(self, session):
+        """Test pipeline log with Risk Guard adjustments"""
+        adjustments = [
+            {"field": "position_size_pct", "original": 60, "adjusted": 50, "reason": "exceeds max"},
+        ]
+        log = PipelineLog(
+            cycle_id="adj-cycle",
+            opus_output={"action": "buy"},
+            risk_guard_passed=True,
+            risk_guard_adjustments=adjustments,
+        )
+        session.add(log)
+        session.commit()
+
+        retrieved = session.query(PipelineLog).first()
+        assert len(retrieved.risk_guard_adjustments) == 1
+        assert retrieved.risk_guard_adjustments[0]["field"] == "position_size_pct"
+
+
+class TestTradeModelExtensions:
+    """Tests for new Trade model fields (cycle_id, stop_loss, take_profit)"""
+
+    @pytest.fixture
+    def session(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        yield session
+        session.close()
+
+    def test_trade_with_stop_loss(self, session):
+        trade = Trade(
+            symbol="MSTR", action="buy", quantity=10.0, price=350.0,
+            order_type="market", status="filled", alpaca_order_id="order-sl",
+            cycle_id="cycle-sl", stop_loss=330.0,
+        )
+        session.add(trade)
+        session.commit()
+
+        retrieved = session.query(Trade).first()
+        assert retrieved.stop_loss == 330.0
+        assert retrieved.take_profit is None
+
+    def test_trade_with_take_profit(self, session):
+        trade = Trade(
+            symbol="MSTR", action="buy", quantity=10.0, price=350.0,
+            order_type="market", status="filled", alpaca_order_id="order-tp",
+            cycle_id="cycle-tp", take_profit=400.0,
+        )
+        session.add(trade)
+        session.commit()
+
+        retrieved = session.query(Trade).first()
+        assert retrieved.take_profit == 400.0
+
+    def test_trade_with_cycle_id(self, session):
+        trade = Trade(
+            symbol="MSTR", action="buy", quantity=10.0, price=350.0,
+            order_type="market", status="filled", alpaca_order_id="order-c",
+            cycle_id="my-cycle-uuid",
+        )
+        session.add(trade)
+        session.commit()
+
+        retrieved = session.query(Trade).first()
+        assert retrieved.cycle_id == "my-cycle-uuid"

@@ -28,7 +28,7 @@ class Trader:
             "buying_power": float(account.buying_power),
             "equity": float(account.equity),
             "last_equity": float(account.last_equity),
-            "daily_pnl": float(account.equity) - float(account.last_equity)
+            "daily_pnl": float(account.equity) - float(account.last_equity),
         }
 
     def get_positions(self) -> list[dict]:
@@ -41,7 +41,7 @@ class Trader:
                 "avg_entry_price": float(p.avg_entry_price),
                 "market_value": float(p.market_value),
                 "unrealized_pl": float(p.unrealized_pl),
-                "unrealized_plpc": float(p.unrealized_plpc)
+                "unrealized_plpc": float(p.unrealized_plpc),
             }
             for p in positions
         ]
@@ -55,7 +55,7 @@ class Trader:
             symbol_or_symbols=symbols,
             timeframe=TimeFrame.Day,
             start=start,
-            end=end
+            end=end,
         )
 
         try:
@@ -72,7 +72,7 @@ class Trader:
                         result[symbol] = {
                             "price": latest.close,
                             "change_5d": f"{change:+.1f}%",
-                            "volume": latest.volume
+                            "volume": latest.volume,
                         }
 
             return result
@@ -86,9 +86,11 @@ class Trader:
         action: str,
         quantity: int,
         order_type: str = "market",
-        limit_price: Optional[float] = None
+        limit_price: Optional[float] = None,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
     ) -> Optional[dict]:
-        """注文実行"""
+        """注文実行（stop_loss / take_profit 対応）"""
         if action not in ["buy", "sell"]:
             print(f"[Trader] Invalid action: {action}")
             return None
@@ -106,31 +108,89 @@ class Trader:
                     qty=quantity,
                     side=side,
                     time_in_force=TimeInForce.GTC,
-                    limit_price=limit_price
+                    limit_price=limit_price,
                 )
             else:
                 order_request = MarketOrderRequest(
                     symbol=symbol,
                     qty=quantity,
                     side=side,
-                    time_in_force=TimeInForce.GTC
+                    time_in_force=TimeInForce.GTC,
                 )
 
             order = self.trading_client.submit_order(order_request)
 
-            return {
+            result = {
                 "order_id": str(order.id),
                 "symbol": order.symbol,
                 "side": order.side.value,
                 "qty": float(order.qty),
                 "type": order.type.value,
                 "status": order.status.value,
-                "submitted_at": str(order.submitted_at)
+                "submitted_at": str(order.submitted_at),
             }
+
+            # stop_loss / take_profit は別注文で発行（bracket order 簡易版）
+            if stop_loss and action == "buy":
+                self._submit_stop_loss(symbol, quantity, stop_loss)
+            if take_profit and action == "buy":
+                self._submit_take_profit(symbol, quantity, take_profit)
+
+            return result
 
         except Exception as e:
             print(f"[Trader] Order error: {e}")
             return None
+
+    def _submit_stop_loss(self, symbol: str, quantity: int, stop_price: float):
+        """ストップロス注文（成行のsell stop）"""
+        try:
+            from alpaca.trading.requests import StopOrderRequest
+            order_request = StopOrderRequest(
+                symbol=symbol,
+                qty=quantity,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.GTC,
+                stop_price=stop_price,
+            )
+            self.trading_client.submit_order(order_request)
+            print(f"[Trader] Stop loss set: {symbol} @ ${stop_price}")
+        except Exception as e:
+            print(f"[Trader] Stop loss order error: {e}")
+
+    def _submit_take_profit(self, symbol: str, quantity: int, limit_price: float):
+        """テイクプロフィット注文（指値のsell limit）"""
+        try:
+            order_request = LimitOrderRequest(
+                symbol=symbol,
+                qty=quantity,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.GTC,
+                limit_price=limit_price,
+            )
+            self.trading_client.submit_order(order_request)
+            print(f"[Trader] Take profit set: {symbol} @ ${limit_price}")
+        except Exception as e:
+            print(f"[Trader] Take profit order error: {e}")
+
+    def execute_emergency_liquidation(self) -> list[dict]:
+        """緊急全ポジション清算"""
+        results = []
+        try:
+            positions = self.get_positions()
+            for pos in positions:
+                result = self.execute_order(
+                    symbol=pos["symbol"],
+                    action="sell",
+                    quantity=int(pos["qty"]),
+                    order_type="market",
+                )
+                if result:
+                    results.append(result)
+                    print(f"[Trader] Emergency sell: {pos['symbol']} x{int(pos['qty'])}")
+        except Exception as e:
+            print(f"[Trader] Emergency liquidation error: {e}")
+        return results
 
     def get_order_status(self, order_id: str) -> Optional[dict]:
         """注文ステータス確認"""
@@ -140,33 +200,8 @@ class Trader:
                 "order_id": str(order.id),
                 "status": order.status.value,
                 "filled_qty": float(order.filled_qty) if order.filled_qty else 0,
-                "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else None
+                "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else None,
             }
         except Exception as e:
             print(f"[Trader] Order status error: {e}")
             return None
-
-
-# テスト用
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    trader = Trader()
-
-    # アカウント情報
-    print("=== Account ===")
-    account = trader.get_account()
-    print(f"Cash: ${account['cash']:,.2f}")
-    print(f"Daily P&L: ${account['daily_pnl']:+,.2f}")
-
-    # ポジション
-    print("\n=== Positions ===")
-    positions = trader.get_positions()
-    print(f"Positions: {len(positions)}")
-
-    # 市場データ
-    print("\n=== Market Data ===")
-    data = trader.get_market_data(["MSTR", "TSLA", "QQQ", "SPY"])
-    for symbol, info in data.items():
-        print(f"{symbol}: ${info['price']:.2f} ({info['change_5d']})")

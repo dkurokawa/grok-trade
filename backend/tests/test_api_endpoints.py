@@ -10,6 +10,7 @@ os.environ["ALPACA_API_KEY"] = "test_key"
 os.environ["ALPACA_SECRET_KEY"] = "test_secret"
 os.environ["ALPACA_PAPER"] = "true"
 os.environ["GROK_API_KEY"] = "test_grok_key"
+os.environ["ANTHROPIC_API_KEY"] = "test_anthropic_key"
 
 from fastapi.testclient import TestClient
 
@@ -19,15 +20,16 @@ class TestHealthEndpoint:
 
     @pytest.fixture
     def client(self):
-        with patch("main.GrokClient"):
-            with patch("main.Trader"):
-                with patch("main.DiscordNotifier"):
-                    with patch("main.init_db"):
-                        with patch("main.get_scheduler_state", return_value=True):
-                            with patch("main.trading_cycle", new_callable=AsyncMock):
-                                from main import app
-                                with TestClient(app) as c:
-                                    yield c
+        with patch("main.GrokClient"), \
+             patch("main.OpusClient"), \
+             patch("main.Trader"), \
+             patch("main.DiscordNotifier"), \
+             patch("main.init_db"), \
+             patch("main.get_scheduler_state", return_value=True), \
+             patch("main.trading_cycle", new_callable=AsyncMock):
+            from main import app
+            with TestClient(app) as c:
+                yield c
 
     def test_health_returns_ok(self, client):
         """Test health endpoint returns OK"""
@@ -73,18 +75,19 @@ class TestStatusEndpoint:
             }
         ]
 
-        with patch("main.GrokClient"):
-            with patch("main.Trader", return_value=mock_trader):
-                with patch("main.DiscordNotifier"):
-                    with patch("main.init_db"):
-                        with patch("main.get_scheduler_state", return_value=True):
-                            with patch("main.trading_cycle", new_callable=AsyncMock):
-                                from importlib import reload
-                                import main
-                                reload(main)
-                                main.trader = mock_trader
-                                with TestClient(main.app) as c:
-                                    yield c
+        with patch("main.GrokClient"), \
+             patch("main.OpusClient"), \
+             patch("main.Trader", return_value=mock_trader), \
+             patch("main.DiscordNotifier"), \
+             patch("main.init_db"), \
+             patch("main.get_scheduler_state", return_value=True), \
+             patch("main.trading_cycle", new_callable=AsyncMock):
+            from importlib import reload
+            import main
+            reload(main)
+            main.trader = mock_trader
+            with TestClient(main.app) as c:
+                yield c
 
     def test_status_returns_account(self, client):
         """Test status endpoint returns account info"""
@@ -118,19 +121,20 @@ class TestStopStartEndpoints:
         mock_notifier.notify_system_stop = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("main.GrokClient"):
-            with patch("main.Trader"):
-                with patch("main.DiscordNotifier", return_value=mock_notifier):
-                    with patch("main.init_db"):
-                        with patch("main.get_scheduler_state", return_value=True):
-                            with patch("main.set_scheduler_state"):
-                                with patch("main.trading_cycle", new_callable=AsyncMock):
-                                    from importlib import reload
-                                    import main
-                                    reload(main)
-                                    main.notifier = mock_notifier
-                                    with TestClient(main.app) as c:
-                                        yield c, mock_notifier
+        with patch("main.GrokClient"), \
+             patch("main.OpusClient"), \
+             patch("main.Trader"), \
+             patch("main.DiscordNotifier", return_value=mock_notifier), \
+             patch("main.init_db"), \
+             patch("main.get_scheduler_state", return_value=True), \
+             patch("main.set_scheduler_state"), \
+             patch("main.trading_cycle", new_callable=AsyncMock):
+            from importlib import reload
+            import main
+            reload(main)
+            main.notifier = mock_notifier
+            with TestClient(main.app) as c:
+                yield c, mock_notifier
 
     def test_stop_endpoint(self, client):
         """Test stop endpoint pauses scheduler"""
@@ -161,24 +165,30 @@ class TestTradesEndpoint:
             MagicMock(
                 id=1,
                 timestamp=datetime(2024, 1, 15, 10, 30),
+                cycle_id="cycle-1",
                 symbol="MSTR",
                 action="buy",
                 quantity=10.0,
                 price=350.0,
                 order_type="market",
                 status="filled",
-                alpaca_order_id="order-1"
+                alpaca_order_id="order-1",
+                stop_loss=330.0,
+                take_profit=400.0,
             ),
             MagicMock(
                 id=2,
                 timestamp=datetime(2024, 1, 15, 14, 0),
+                cycle_id="cycle-2",
                 symbol="TSLA",
                 action="sell",
                 quantity=5.0,
                 price=250.0,
                 order_type="market",
                 status="filled",
-                alpaca_order_id="order-2"
+                alpaca_order_id="order-2",
+                stop_loss=None,
+                take_profit=None,
             )
         ]
 
@@ -192,18 +202,19 @@ class TestTradesEndpoint:
 
     @pytest.fixture
     def client(self, mock_session):
-        with patch("main.GrokClient"):
-            with patch("main.Trader"):
-                with patch("main.DiscordNotifier"):
-                    with patch("main.init_db"):
-                        with patch("main.get_scheduler_state", return_value=True):
-                            with patch("main.get_session", return_value=mock_session):
-                                with patch("main.trading_cycle", new_callable=AsyncMock):
-                                    from importlib import reload
-                                    import main
-                                    reload(main)
-                                    with TestClient(main.app) as c:
-                                        yield c
+        with patch("main.GrokClient"), \
+             patch("main.OpusClient"), \
+             patch("main.Trader"), \
+             patch("main.DiscordNotifier"), \
+             patch("main.init_db"), \
+             patch("main.get_scheduler_state", return_value=True), \
+             patch("main.get_session", return_value=mock_session), \
+             patch("main.trading_cycle", new_callable=AsyncMock):
+            from importlib import reload
+            import main
+            reload(main)
+            with TestClient(main.app) as c:
+                yield c
 
     def test_trades_returns_list(self, client):
         """Test trades endpoint returns list"""
@@ -229,26 +240,32 @@ class TestDecisionsEndpoint:
 
     @pytest.fixture
     def mock_session(self):
-        """Create mock session with decisions"""
-        mock_decisions = [
+        """Create mock session with pipeline logs (decisions now read from PipelineLog)"""
+        mock_logs = [
             MagicMock(
                 id=1,
+                cycle_id="cycle-abc",
                 timestamp=datetime(2024, 1, 15, 10, 0),
-                parsed_action={"action": "buy", "symbol": "MSTR", "quantity": 10, "confidence": 75},
-                executed=True,
-                blocked_reason=None
+                opus_skipped=False,
+                opus_output={"action": "buy", "symbol": "MSTR", "confidence": 75},
+                risk_guard_passed=True,
+                risk_guard_reason=None,
+                order_submitted=True,
             ),
             MagicMock(
                 id=2,
+                cycle_id="cycle-def",
                 timestamp=datetime(2024, 1, 15, 10, 15),
-                parsed_action={"action": "hold", "symbol": "MSTR", "quantity": 0, "confidence": 60},
-                executed=False,
-                blocked_reason="hold"
-            )
+                opus_skipped=True,
+                opus_output=None,
+                risk_guard_passed=None,
+                risk_guard_reason=None,
+                order_submitted=False,
+            ),
         ]
 
         mock_query = MagicMock()
-        mock_query.order_by.return_value.limit.return_value.all.return_value = mock_decisions
+        mock_query.order_by.return_value.limit.return_value.all.return_value = mock_logs
 
         mock_session = MagicMock()
         mock_session.query.return_value = mock_query
@@ -257,18 +274,19 @@ class TestDecisionsEndpoint:
 
     @pytest.fixture
     def client(self, mock_session):
-        with patch("main.GrokClient"):
-            with patch("main.Trader"):
-                with patch("main.DiscordNotifier"):
-                    with patch("main.init_db"):
-                        with patch("main.get_scheduler_state", return_value=True):
-                            with patch("main.get_session", return_value=mock_session):
-                                with patch("main.trading_cycle", new_callable=AsyncMock):
-                                    from importlib import reload
-                                    import main
-                                    reload(main)
-                                    with TestClient(main.app) as c:
-                                        yield c
+        with patch("main.GrokClient"), \
+             patch("main.OpusClient"), \
+             patch("main.Trader"), \
+             patch("main.DiscordNotifier"), \
+             patch("main.init_db"), \
+             patch("main.get_scheduler_state", return_value=True), \
+             patch("main.get_session", return_value=mock_session), \
+             patch("main.trading_cycle", new_callable=AsyncMock):
+            from importlib import reload
+            import main
+            reload(main)
+            with TestClient(main.app) as c:
+                yield c
 
     def test_decisions_returns_list(self, client):
         """Test decisions endpoint returns list"""
@@ -289,21 +307,21 @@ class TestDatabaseUnavailable:
 
     @pytest.fixture
     def client(self):
-        with patch("main.GrokClient"):
-            with patch("main.Trader"):
-                with patch("main.DiscordNotifier"):
-                    with patch("main.init_db"):
-                        with patch("main.get_scheduler_state", return_value=True):
-                            with patch("main.trading_cycle", new_callable=AsyncMock):
-                                from importlib import reload
-                                import main
-                                reload(main)
-                                # Patch get_session at the endpoint level
-                                original_get_session = main.get_session
-                                main.get_session = lambda: None
-                                with TestClient(main.app) as c:
-                                    yield c
-                                main.get_session = original_get_session
+        with patch("main.GrokClient"), \
+             patch("main.OpusClient"), \
+             patch("main.Trader"), \
+             patch("main.DiscordNotifier"), \
+             patch("main.init_db"), \
+             patch("main.get_scheduler_state", return_value=True), \
+             patch("main.trading_cycle", new_callable=AsyncMock):
+            from importlib import reload
+            import main
+            reload(main)
+            original_get_session = main.get_session
+            main.get_session = lambda: None
+            with TestClient(main.app) as c:
+                yield c
+            main.get_session = original_get_session
 
     def test_trades_db_unavailable(self, client):
         """Test trades endpoint when DB is unavailable"""
@@ -331,21 +349,21 @@ class TestDatabaseError:
         mock_error_session.query.side_effect = Exception("Database connection error")
         mock_error_session.close = MagicMock()
 
-        with patch("main.GrokClient"):
-            with patch("main.Trader"):
-                with patch("main.DiscordNotifier"):
-                    with patch("main.init_db"):
-                        with patch("main.get_scheduler_state", return_value=True):
-                            with patch("main.trading_cycle", new_callable=AsyncMock):
-                                from importlib import reload
-                                import main
-                                reload(main)
-                                # Patch get_session at the endpoint level
-                                original_get_session = main.get_session
-                                main.get_session = lambda: mock_error_session
-                                with TestClient(main.app) as c:
-                                    yield c
-                                main.get_session = original_get_session
+        with patch("main.GrokClient"), \
+             patch("main.OpusClient"), \
+             patch("main.Trader"), \
+             patch("main.DiscordNotifier"), \
+             patch("main.init_db"), \
+             patch("main.get_scheduler_state", return_value=True), \
+             patch("main.trading_cycle", new_callable=AsyncMock):
+            from importlib import reload
+            import main
+            reload(main)
+            original_get_session = main.get_session
+            main.get_session = lambda: mock_error_session
+            with TestClient(main.app) as c:
+                yield c
+            main.get_session = original_get_session
 
     def test_trades_db_error(self, client):
         """Test trades endpoint handles DB error"""
@@ -369,17 +387,18 @@ class TestCORSHeaders:
 
     @pytest.fixture
     def client(self):
-        with patch("main.GrokClient"):
-            with patch("main.Trader"):
-                with patch("main.DiscordNotifier"):
-                    with patch("main.init_db"):
-                        with patch("main.get_scheduler_state", return_value=True):
-                            with patch("main.trading_cycle", new_callable=AsyncMock):
-                                from importlib import reload
-                                import main
-                                reload(main)
-                                with TestClient(main.app) as c:
-                                    yield c
+        with patch("main.GrokClient"), \
+             patch("main.OpusClient"), \
+             patch("main.Trader"), \
+             patch("main.DiscordNotifier"), \
+             patch("main.init_db"), \
+             patch("main.get_scheduler_state", return_value=True), \
+             patch("main.trading_cycle", new_callable=AsyncMock):
+            from importlib import reload
+            import main
+            reload(main)
+            with TestClient(main.app) as c:
+                yield c
 
     def test_cors_allows_any_origin(self, client):
         """Test CORS allows any origin"""
@@ -419,18 +438,19 @@ class TestEdgeCases:
 
     @pytest.fixture
     def client(self, mock_trader):
-        with patch("main.GrokClient"):
-            with patch("main.Trader", return_value=mock_trader):
-                with patch("main.DiscordNotifier"):
-                    with patch("main.init_db"):
-                        with patch("main.get_scheduler_state", return_value=True):
-                            with patch("main.trading_cycle", new_callable=AsyncMock):
-                                from importlib import reload
-                                import main
-                                reload(main)
-                                main.trader = mock_trader
-                                with TestClient(main.app) as c:
-                                    yield c
+        with patch("main.GrokClient"), \
+             patch("main.OpusClient"), \
+             patch("main.Trader", return_value=mock_trader), \
+             patch("main.DiscordNotifier"), \
+             patch("main.init_db"), \
+             patch("main.get_scheduler_state", return_value=True), \
+             patch("main.trading_cycle", new_callable=AsyncMock):
+            from importlib import reload
+            import main
+            reload(main)
+            main.trader = mock_trader
+            with TestClient(main.app) as c:
+                yield c
 
     def test_status_with_zero_values(self, client):
         """Test status endpoint with zero values"""
@@ -496,18 +516,19 @@ class TestMultipleRequests:
         }
         mock_trader.get_positions.return_value = []
 
-        with patch("main.GrokClient"):
-            with patch("main.Trader", return_value=mock_trader):
-                with patch("main.DiscordNotifier"):
-                    with patch("main.init_db"):
-                        with patch("main.get_scheduler_state", return_value=True):
-                            with patch("main.trading_cycle", new_callable=AsyncMock):
-                                from importlib import reload
-                                import main
-                                reload(main)
-                                main.trader = mock_trader
-                                with TestClient(main.app) as c:
-                                    yield c
+        with patch("main.GrokClient"), \
+             patch("main.OpusClient"), \
+             patch("main.Trader", return_value=mock_trader), \
+             patch("main.DiscordNotifier"), \
+             patch("main.init_db"), \
+             patch("main.get_scheduler_state", return_value=True), \
+             patch("main.trading_cycle", new_callable=AsyncMock):
+            from importlib import reload
+            import main
+            reload(main)
+            main.trader = mock_trader
+            with TestClient(main.app) as c:
+                yield c
 
     def test_multiple_health_checks(self, client):
         """Test multiple rapid health checks"""

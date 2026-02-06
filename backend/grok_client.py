@@ -1,8 +1,46 @@
-"""Grok API クライアント - 市場分析と売買判断"""
+"""Grok API クライアント - 市場情報収集（判断しない）"""
 import os
 import json
+import time
 from openai import OpenAI
 from typing import Optional
+
+
+GROK_SYSTEM = """あなたは市場情報アナリストです。
+事実の報告のみ行ってください。売買の推奨は絶対にしないでください。"""
+
+GROK_PROMPT_TEMPLATE = """以下のJSON形式で市場状況を報告してください。
+
+{{
+  "timestamp": "EST時刻",
+  "significant_change": true/false,
+  "sentiment": {{
+    "overall": -100〜+100,
+    "trending_tickers": [
+      {{"symbol": "NVDA", "reason": "決算発表後の反応"}}
+    ],
+    "notable_signals": ["影響力のある動き・投稿の要約"]
+  }},
+  "breaking_news": ["直近の重要ニュース（なければ空配列）"],
+  "market_context": {{
+    "spy_trend": "bullish/bearish/neutral",
+    "vix_level": "low/moderate/high/extreme",
+    "sector_rotation": "どのセクターに資金が動いているか"
+  }}
+}}
+
+重要: significant_change は以下の場合のみ true にしてください:
+- センチメントが前回から大きく変動（±30以上）
+- 重要ニュースがある
+- VIXが急変
+それ以外は false にしてください。
+
+== 現在の市場データ ==
+{market_data}
+
+== 監視銘柄のポジション情報 ==
+{positions}
+"""
 
 
 class GrokClient:
@@ -11,95 +49,60 @@ class GrokClient:
             api_key=os.getenv("GROK_API_KEY"),
             base_url="https://api.x.ai/v1"
         )
-        self.model = "grok-3-mini"  # 高速・低コスト
+        self.model = os.getenv("GROK_MODEL", "grok-3-mini")
 
-    def analyze_market(
+    def collect_market_report(
         self,
-        balance: float,
+        market_data: dict,
         positions: list[dict],
-        market_data: dict
-    ) -> Optional[dict]:
+    ) -> tuple[Optional[dict], int]:
         """
-        市場分析して売買判断を返す
+        市場情報を収集してMarketReportを返す。判断はしない。
 
         Returns:
-            {
-                "action": "buy" | "sell" | "hold",
-                "symbol": "MSTR",
-                "quantity": 10,
-                "order_type": "market" | "limit",
-                "reasoning": "理由",
-                "confidence": 0-100
-            }
+            (report_dict or None, latency_ms)
         """
-        prompt = self._build_prompt(balance, positions, market_data)
+        prompt = self._build_prompt(market_data, positions)
 
+        start = time.time()
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a trading analyst. "
-                            "Always respond with valid JSON only. "
-                            "No markdown, no explanation outside JSON."
-                        )
-                    },
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": GROK_SYSTEM},
+                    {"role": "user", "content": prompt},
                 ],
-                max_tokens=500,
-                temperature=0.3  # 一貫性重視
+                max_tokens=800,
+                temperature=0.3,
             )
 
+            latency_ms = int((time.time() - start) * 1000)
             raw_response = response.choices[0].message.content
-            return self._parse_response(raw_response)
+            report = self._parse_response(raw_response)
+            return report, latency_ms
 
         except Exception as e:
+            latency_ms = int((time.time() - start) * 1000)
             print(f"[Grok] API error: {e}")
-            return None
+            return None, latency_ms
 
     def _build_prompt(
         self,
-        balance: float,
+        market_data: dict,
         positions: list[dict],
-        market_data: dict
     ) -> str:
-        """プロンプト構築"""
-        positions_str = json.dumps(positions, indent=2) if positions else "None"
         market_str = json.dumps(market_data, indent=2)
+        positions_str = json.dumps(positions, indent=2) if positions else "None"
 
-        return f"""
-Current Portfolio:
-- Cash Balance: ${balance:,.2f}
-- Positions: {positions_str}
-
-Market Data (last 5 days):
-{market_str}
-
-Trading Strategy:
-- Focus on MSTR, TSLA, QQQ, SPY
-- BTC bullish bias (MSTR preferred)
-- Risk tolerance: HIGH
-- Hold period: Days to weeks
-
-Analyze and provide trading decision in this exact JSON format:
-{{
-  "action": "buy" | "sell" | "hold",
-  "symbol": "SYMBOL",
-  "quantity": number,
-  "order_type": "market",
-  "reasoning": "brief reason",
-  "confidence": 0-100
-}}
-
-If no action needed, use "action": "hold" with quantity: 0.
-"""
+        return GROK_PROMPT_TEMPLATE.format(
+            market_data=market_str,
+            positions=positions_str,
+        )
 
     def _parse_response(self, raw: str) -> Optional[dict]:
-        """レスポンスをパース"""
+        """レスポンスをパースしてMarketReportを返す"""
         try:
-            # JSONブロックを抽出（```json ... ``` 対応）
+            # JSONブロック抽出（```json ... ``` 対応）
             if "```" in raw:
                 start = raw.find("{")
                 end = raw.rfind("}") + 1
@@ -108,43 +111,29 @@ If no action needed, use "action": "hold" with quantity: 0.
             data = json.loads(raw)
 
             # 必須フィールド検証
-            required = ["action", "symbol", "quantity", "reasoning", "confidence"]
-            for field in required:
-                if field not in data:
-                    print(f"[Grok] Missing field: {field}")
-                    return None
+            if "significant_change" not in data:
+                data["significant_change"] = False
 
-            # 値の正規化
-            data["action"] = data["action"].lower()
-            data["quantity"] = int(data["quantity"])
-            data["confidence"] = int(data["confidence"])
-            data["order_type"] = data.get("order_type", "market").lower()
+            if "sentiment" not in data:
+                data["sentiment"] = {"overall": 0, "trending_tickers": [], "notable_signals": []}
+
+            if "breaking_news" not in data:
+                data["breaking_news"] = []
+
+            if "market_context" not in data:
+                data["market_context"] = {
+                    "spy_trend": "neutral",
+                    "vix_level": "moderate",
+                    "sector_rotation": "unknown",
+                }
+
+            # 型の正規化
+            data["significant_change"] = bool(data["significant_change"])
+            data["sentiment"]["overall"] = int(data["sentiment"].get("overall", 0))
 
             return data
 
         except json.JSONDecodeError as e:
             print(f"[Grok] JSON parse error: {e}")
-            print(f"[Grok] Raw response: {raw}")
+            print(f"[Grok] Raw response: {raw[:300]}")
             return None
-
-
-# テスト用
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    client = GrokClient()
-
-    # テストデータ
-    result = client.analyze_market(
-        balance=100000,
-        positions=[],
-        market_data={
-            "MSTR": {"price": 350, "change_5d": "+5%"},
-            "TSLA": {"price": 250, "change_5d": "-2%"},
-            "QQQ": {"price": 400, "change_5d": "+1%"}
-        }
-    )
-
-    print("Analysis Result:")
-    print(json.dumps(result, indent=2))
