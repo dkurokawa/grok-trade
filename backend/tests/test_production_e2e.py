@@ -322,7 +322,7 @@ class TestProductionTradeHistory:
         assert "decisions" in data
         if len(data["decisions"]) > 0:
             decision = data["decisions"][0]
-            expected_fields = ["id", "timestamp", "parsed_action", "executed"]
+            expected_fields = ["id", "cycle_id", "timestamp", "opus_skipped", "order_submitted"]
             for field in expected_fields:
                 assert field in decision, f"Missing decision field: {field}"
 
