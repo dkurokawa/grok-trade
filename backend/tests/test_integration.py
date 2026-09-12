@@ -3,16 +3,19 @@ import pytest
 import os
 from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime, date
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 # Set environment before imports
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["ALPACA_API_KEY"] = "test_key"
 os.environ["ALPACA_SECRET_KEY"] = "test_secret"
 os.environ["ALPACA_PAPER"] = "true"
 os.environ["GROK_API_KEY"] = "test_grok_key"
 os.environ["ANTHROPIC_API_KEY"] = "test_anthropic_key"
+
+
+@pytest.fixture(autouse=True)
+def _pipeline_env(dynamo_table, monkeypatch):
+    """Route the data layer through moto and exercise the Opus decision path."""
+    monkeypatch.setenv("DECISION_ENGINE", "opus")
+    yield
 
 
 def _grok_report(significant=True, sentiment=55):
@@ -136,123 +139,106 @@ class TestRiskGuardOpusIntegration:
 
 
 class TestDatabaseIntegration:
-    """Test database operations integration"""
+    """DynamoDB data-layer integration (moto-backed)."""
 
     @pytest.fixture
-    def db_session(self):
-        from db.models import Base
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        Session = sessionmaker(bind=engine)
-        session = Session()
-        yield session
-        session.close()
+    def dyn(self):
+        import db.dynamo as d
+        return d
 
-    def test_trade_decision_consistency(self, db_session):
-        from db.models import Trade, Decision
-        decision = Decision(
-            market_context={"balance": 100000},
-            grok_response='{"action": "buy"}',
-            parsed_action={"action": "buy", "symbol": "MSTR", "quantity": 10},
-            executed=True,
+    def test_trade_and_pipeline_consistency(self, dyn):
+        """The logged trade matches the decision recorded for the same cycle"""
+        decision = _opus_decision()
+        dyn.log_pipeline(
+            cycle_id="cycle-123",
+            decision_engine="opus",
+            grok_output=_grok_report(),
+            opus_output=decision,
+            rg_passed=True,
+            order_submitted=True,
+            alpaca_order_id="order-123",
         )
-        db_session.add(decision)
-
-        trade = Trade(
-            symbol="MSTR", action="buy", quantity=10.0, price=350.0,
-            order_type="market", status="filled", alpaca_order_id="order-123",
+        dyn.log_trade(
+            cycle_id="cycle-123", symbol="MSTR", action="buy", quantity=10.0,
+            price=350.0, order_type="market", status="filled",
+            alpaca_order_id="order-123", stop_loss=330.0, take_profit=400.0,
         )
-        db_session.add(trade)
-        db_session.commit()
 
-        saved_decision = db_session.query(Decision).first()
-        saved_trade = db_session.query(Trade).first()
-        assert saved_decision.parsed_action["action"] == saved_trade.action
-        assert saved_decision.parsed_action["symbol"] == saved_trade.symbol
+        logged = dyn.get_pipeline_logs(1)[0]
+        trade = dyn.get_trades(1)[0]
 
-    def test_pipeline_log_creation(self, db_session):
-        """Test PipelineLog stores full cycle data"""
-        from db.models import PipelineLog
-        log = PipelineLog(
+        assert logged["cycle_id"] == trade["cycle_id"]
+        assert logged["opus_output"]["action"] == trade["action"]
+        assert logged["opus_output"]["symbol"] == trade["symbol"]
+        assert logged["alpaca_order_id"] == trade["alpaca_order_id"]
+
+    def test_pipeline_log_creation(self, dyn):
+        """A full cycle round-trips every stage"""
+        dyn.log_pipeline(
             cycle_id="test-uuid-123",
+            decision_engine="opus",
             grok_input={"market_data": {"MSTR": {"price": 350}}},
             grok_output=_grok_report(),
             grok_latency_ms=120,
             opus_output=_opus_decision(),
             opus_latency_ms=800,
-            opus_adjustments=[],
-            risk_guard_passed=True,
-            risk_guard_adjustments=[],
+            rg_passed=True,
             order_submitted=True,
             alpaca_order_id="order-123",
             execution_result={"status": "filled"},
         )
-        db_session.add(log)
-        db_session.commit()
 
-        saved = db_session.query(PipelineLog).first()
-        assert saved.cycle_id == "test-uuid-123"
-        assert saved.grok_latency_ms == 120
-        assert saved.opus_output["action"] == "buy"
-        assert saved.order_submitted is True
+        saved = dyn.get_pipeline_logs(1)[0]
+        assert saved["cycle_id"] == "test-uuid-123"
+        assert saved["grok_latency_ms"] == 120
+        assert saved["opus_output"]["action"] == "buy"
+        assert saved["order_submitted"] is True
+        assert saved["decision_engine"] == "opus"
 
-    def test_pipeline_log_opus_skipped(self, db_session):
-        """Test PipelineLog when Opus is skipped"""
-        from db.models import PipelineLog
-        log = PipelineLog(
+    def test_pipeline_log_decision_skipped(self, dyn):
+        """A skipped cycle records the Grok report and no decision"""
+        dyn.log_pipeline(
             cycle_id="skip-uuid",
             grok_output=_grok_report(significant=False),
             grok_latency_ms=80,
             opus_skipped=True,
         )
-        db_session.add(log)
-        db_session.commit()
 
-        saved = db_session.query(PipelineLog).first()
-        assert saved.opus_skipped is True
-        assert saved.opus_output is None
+        saved = dyn.get_pipeline_logs(1)[0]
+        assert saved["opus_skipped"] is True
+        assert saved["opus_output"] is None
 
-    def test_trade_with_stop_loss_take_profit(self, db_session):
-        """Test Trade with new stop_loss / take_profit fields"""
-        from db.models import Trade
-        trade = Trade(
-            symbol="MSTR", action="buy", quantity=10.0, price=350.0,
-            order_type="market", status="filled", alpaca_order_id="order-sl",
-            cycle_id="cycle-123", stop_loss=330.0, take_profit=400.0,
+    def test_trade_with_stop_loss_take_profit(self, dyn):
+        dyn.log_trade(
+            cycle_id="cycle-123", symbol="MSTR", action="buy", quantity=10.0,
+            price=350.0, order_type="market", status="filled",
+            alpaca_order_id="order-sl", stop_loss=330.0, take_profit=400.0,
         )
-        db_session.add(trade)
-        db_session.commit()
 
-        saved = db_session.query(Trade).first()
-        assert saved.stop_loss == 330.0
-        assert saved.take_profit == 400.0
-        assert saved.cycle_id == "cycle-123"
+        saved = dyn.get_trades(1)[0]
+        assert saved["stop_loss"] == 330.0
+        assert saved["take_profit"] == 400.0
+        assert saved["cycle_id"] == "cycle-123"
 
-    def test_system_state_persistence(self, db_session):
-        from db.models import SystemState
-        state = SystemState(
-            key="scheduler_running",
-            value={"running": True, "last_cycle": datetime.now().isoformat()},
-        )
-        db_session.add(state)
-        db_session.commit()
+    def test_system_state_persistence(self, dyn):
+        dyn.set_scheduler_state(True)
+        assert dyn.get_scheduler_state() is True
 
-        saved = db_session.query(SystemState).filter_by(key="scheduler_running").first()
-        assert saved.value["running"] is True
-
-        saved.value = {"running": False, "reason": "Manual stop"}
-        db_session.commit()
-
-        updated = db_session.query(SystemState).filter_by(key="scheduler_running").first()
-        assert updated.value["running"] is False
+        dyn.set_scheduler_state(False)
+        assert dyn.get_scheduler_state() is False
 
 
 class TestAPIIntegration:
     """Test API endpoints with real component integration"""
 
+    SECRET = "test_shared_secret"  # matches conftest API_SHARED_SECRET
+
     @pytest.fixture
-    def client(self):
+    def client(self, monkeypatch):
         from fastapi.testclient import TestClient
+
+        import app as app_module
+
         mock_trader = MagicMock()
         mock_trader.get_account.return_value = {
             "cash": 100000.0, "portfolio_value": 100000.0,
@@ -261,45 +247,53 @@ class TestAPIIntegration:
         mock_trader.get_positions.return_value = [
             {"symbol": "MSTR", "qty": 10.0, "market_value": 3500.0}
         ]
+        mock_notifier = MagicMock()
+        mock_notifier.notify_system_stop = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock()
 
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader", return_value=mock_trader), \
-             patch("main.DiscordNotifier"), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from importlib import reload
-            import main
-            reload(main)
-            main.trader = mock_trader
-            with TestClient(main.app) as c:
-                yield c
+        monkeypatch.setattr(app_module, "trader", mock_trader)
+        monkeypatch.setattr(app_module, "notifier", mock_notifier)
+        return TestClient(app_module.app)
 
     def test_health_reflects_scheduler_state(self, client):
         response = client.get("/health")
         assert response.status_code == 200
-        data = response.json()
-        assert "scheduler_running" in data
+        assert "scheduler_running" in response.json()
 
     def test_status_includes_all_data(self, client):
         response = client.get("/status")
         assert response.status_code == 200
         data = response.json()
-        assert "account" in data
-        assert "positions" in data
         assert data["account"]["cash"] == 100000.0
         assert len(data["positions"]) == 1
 
     def test_stop_start_cycle(self, client):
-        with patch("main.set_scheduler_state"):
-            stop_response = client.post("/stop")
-            assert stop_response.status_code == 200
-            assert stop_response.json()["status"] == "stopped"
+        import db.dynamo as dyn
+        headers = {"x-api-key": self.SECRET}
 
-            start_response = client.post("/start")
-            assert start_response.status_code == 200
-            assert start_response.json()["status"] == "running"
+        stop_response = client.post("/stop", headers=headers)
+        assert stop_response.status_code == 200
+        assert stop_response.json()["status"] == "stopped"
+        assert dyn.get_scheduler_state() is False
+
+        start_response = client.post("/start", headers=headers)
+        assert start_response.status_code == 200
+        assert start_response.json()["status"] == "running"
+        assert dyn.get_scheduler_state() is True
+
+    def test_mutating_endpoints_require_secret(self, client):
+        assert client.post("/stop").status_code == 401
+        assert client.post("/start").status_code == 401
+
+    def test_pipeline_endpoint_returns_logs(self, client):
+        import db.dynamo as dyn
+        dyn.log_pipeline(cycle_id="c1", decision_engine="opus", grok_latency_ms=90)
+
+        response = client.get("/pipeline")
+        assert response.status_code == 200
+        logs = response.json()["logs"]
+        assert len(logs) == 1
+        assert logs[0]["cycle_id"] == "c1"
 
 
 class TestNotificationIntegration:
@@ -335,18 +329,18 @@ class TestNotificationIntegration:
         mock_opus = MagicMock()
         mock_opus.analyze.return_value = (_opus_decision(), 800)
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"), \
-             patch("main.log_trade"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         # Verify pipeline logs sent for grok, opus, execution
@@ -366,15 +360,15 @@ class TestNotificationIntegration:
         }
         mock_trader.get_positions.return_value = []
 
-        with patch("main.trader", mock_trader), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.scheduler"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.set_scheduler_state"):
             mock_guard.check_system_health.return_value = MagicMock(
                 allowed=False, reason="Daily loss limit"
             )
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_notifier.notify_system_stop.assert_called_once()
@@ -411,18 +405,18 @@ class TestPipelineDataFlow:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"), \
-             patch("main.log_trade"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         # Verify Opus received the grok_report
@@ -457,18 +451,18 @@ class TestPipelineDataFlow:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"), \
-             patch("main.log_trade"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         # Verify guard.check() received the decision
@@ -489,9 +483,9 @@ class TestErrorHandlingIntegration:
         mock_notifier = MagicMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.notifier", mock_notifier):
-            from main import trading_cycle
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.notifier", mock_notifier):
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_notifier.notify_alert.assert_called()
@@ -514,12 +508,12 @@ class TestErrorHandlingIntegration:
         mock_notifier = MagicMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard:
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard:
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_notifier.notify_alert.assert_called()
@@ -549,18 +543,18 @@ class TestErrorHandlingIntegration:
         mock_notifier.send_pipeline_log = AsyncMock(side_effect=Exception("Discord error"))
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"), \
-             patch("main.log_trade"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_trader.execute_order.assert_called_once()

@@ -623,3 +623,165 @@ class TestTraderEdgeCases:
         # Current implementation checks quantity > 0, and 0.5 > 0 is True
         # so the order gets submitted (Alpaca may handle fractional shares)
         assert result is not None
+
+
+class TestDataFeed:
+    """Alpaca's free plan only serves IEX; defaulting to SIP made every
+    market-data call fail with 'subscription does not permit querying recent
+    SIP data', which aborted the pipeline before Stage 1."""
+
+    @pytest.fixture
+    def make_trader(self):
+        def _make():
+            with patch("trader.TradingClient"), patch("trader.StockHistoricalDataClient"):
+                return Trader()
+        return _make
+
+    def test_defaults_to_iex(self, make_trader, monkeypatch):
+        from alpaca.data.enums import DataFeed
+        monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
+        assert make_trader().data_feed == DataFeed.IEX
+
+    def test_feed_is_overridable(self, make_trader, monkeypatch):
+        from alpaca.data.enums import DataFeed
+        monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
+        assert make_trader().data_feed == DataFeed.SIP
+
+    def test_request_carries_the_feed(self, make_trader, monkeypatch):
+        from alpaca.data.enums import DataFeed
+        monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
+        t = make_trader()
+
+        captured = {}
+
+        def capture(req):
+            captured["feed"] = req.feed
+            raise RuntimeError("stop after capture")
+
+        t.data_client = MagicMock()
+        t.data_client.get_stock_bars.side_effect = capture
+        t.get_market_data(["SPY"])
+
+        assert captured["feed"] == DataFeed.IEX
+
+
+class TestProtectiveOrders:
+    """stop_loss and take_profit must ride on the entry order.
+
+    Submitting them as two separate sell orders cannot work: the shares are not
+    owned until the entry fills, and once they are, the first sell order holds
+    them so the second is rejected.
+    """
+
+    @pytest.fixture
+    def bracket_trader(self):
+        with patch.dict(os.environ, {
+            "ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s", "ALPACA_PAPER": "true",
+        }):
+            with patch("trader.TradingClient") as mock_trading:
+                with patch("trader.StockHistoricalDataClient"):
+                    t = Trader()
+                    order = MagicMock()
+                    order.id = "order-1"
+                    order.symbol = "MSTR"
+                    order.side.value = "buy"
+                    order.qty = "7"
+                    order.type.value = "market"
+                    order.status.value = "accepted"
+                    order.submitted_at = datetime.now()
+                    mock_trading.return_value.submit_order.return_value = order
+                    return t, mock_trading.return_value
+
+    def _request(self, mock_client):
+        return mock_client.submit_order.call_args[0][0]
+
+    def test_both_legs_make_a_bracket(self, bracket_trader):
+        from alpaca.trading.enums import OrderClass
+        t, mock_client = bracket_trader
+        t.execute_order("MSTR", "buy", 7, stop_loss=120.0, take_profit=150.0)
+
+        req = self._request(mock_client)
+        assert req.order_class == OrderClass.BRACKET
+        assert req.stop_loss.stop_price == 120.0
+        assert req.take_profit.limit_price == 150.0
+        assert mock_client.submit_order.call_count == 1  # one order, not three
+
+    def test_stop_loss_only_makes_an_oto(self, bracket_trader):
+        from alpaca.trading.enums import OrderClass
+        t, mock_client = bracket_trader
+        t.execute_order("MSTR", "buy", 7, stop_loss=120.0)
+
+        req = self._request(mock_client)
+        assert req.order_class == OrderClass.OTO
+        assert req.stop_loss.stop_price == 120.0
+
+    def test_plain_buy_has_no_order_class(self, bracket_trader):
+        t, mock_client = bracket_trader
+        t.execute_order("MSTR", "buy", 7)
+        assert self._request(mock_client).order_class is None
+
+    def test_prices_rounded_to_cents(self, bracket_trader):
+        """Alpaca rejects sub-penny prices on stocks over $1."""
+        t, mock_client = bracket_trader
+        t.execute_order("MSTR", "buy", 7, stop_loss=120.456, take_profit=150.994)
+
+        req = self._request(mock_client)
+        assert req.stop_loss.stop_price == 120.46
+        assert req.take_profit.limit_price == 150.99
+
+    def test_sell_ignores_protective_legs(self, bracket_trader):
+        """A sell closes a position; attaching a stop to it would open a short."""
+        t, mock_client = bracket_trader
+        t.execute_order("MSTR", "sell", 7, stop_loss=120.0, take_profit=150.0)
+        assert self._request(mock_client).order_class is None
+
+
+class TestOpenBuyOrders:
+    @pytest.fixture
+    def order_trader(self):
+        with patch("trader.TradingClient") as mock_trading:
+            with patch("trader.StockHistoricalDataClient"):
+                return Trader(), mock_trading.return_value
+
+    def test_returns_only_buy_side_symbols(self, order_trader):
+        """Protective sells linger for held symbols; they must not look like a
+        pending entry and block the next buy forever."""
+        from alpaca.trading.enums import OrderSide
+        t, mock_client = order_trader
+
+        buy, sell = MagicMock(), MagicMock()
+        buy.symbol, buy.side = "MSTR", OrderSide.BUY
+        sell.symbol, sell.side = "TSLA", OrderSide.SELL
+        mock_client.get_orders.return_value = [buy, sell]
+
+        assert t.get_open_buy_order_symbols() == {"MSTR"}
+
+    def test_returns_empty_set_on_error(self, order_trader):
+        t, mock_client = order_trader
+        mock_client.get_orders.side_effect = RuntimeError("boom")
+        assert t.get_open_buy_order_symbols() == set()
+
+
+class TestEmergencyLiquidation:
+    @pytest.fixture
+    def liquidation_trader(self):
+        with patch("trader.TradingClient") as mock_trading:
+            with patch("trader.StockHistoricalDataClient"):
+                return Trader(), mock_trading.return_value
+
+    def test_cancels_open_orders_before_closing(self, liquidation_trader):
+        """Bracket legs hold the shares, so a plain sell would be rejected."""
+        t, mock_client = liquidation_trader
+        closed = MagicMock()
+        closed.symbol, closed.status = "MSTR", 200
+        mock_client.close_all_positions.return_value = [closed]
+
+        results = t.execute_emergency_liquidation()
+
+        mock_client.close_all_positions.assert_called_once_with(cancel_orders=True)
+        assert results == [{"symbol": "MSTR", "status": 200}]
+
+    def test_error_returns_empty(self, liquidation_trader):
+        t, mock_client = liquidation_trader
+        mock_client.close_all_positions.side_effect = RuntimeError("boom")
+        assert t.execute_emergency_liquidation() == []

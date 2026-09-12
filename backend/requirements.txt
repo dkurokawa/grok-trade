@@ -4,16 +4,8 @@ alpaca-py>=0.21.0
 # Grok/xAI
 openai>=1.0.0  # xAI uses OpenAI-compatible API
 
-# Claude Opus 4.6
+# Claude Opus 4.6 (used when DECISION_ENGINE=opus)
 anthropic>=0.40.0
-
-# Database
-sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.0
-alembic>=1.13.0
-
-# Scheduler
-apscheduler>=3.10.0
 
 # HTTP
 httpx>=0.27.0
@@ -24,9 +16,15 @@ python-dotenv>=1.0.0
 pandas>=2.0.0
 pytz>=2024.1
 
-# Server
-uvicorn>=0.27.0
+# API (Lambda: FastAPI wrapped by Mangum)
 fastapi>=0.109.0
+mangum>=0.17.0
+
+# AWS SDK (present in the Lambda runtime; pinned here for local dev/tests)
+boto3>=1.34.0
 
 # Monitoring
 sentry-sdk[fastapi]>=2.0.0
+
+# Local dev server only (not used in Lambda)
+uvicorn>=0.27.0

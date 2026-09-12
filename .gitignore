@@ -16,6 +16,7 @@ venv/
 *.egg-info/
 dist/
 build/
+.coverage
 coverage.xml
 test-results.xml
 e2e-results.xml
@@ -43,3 +44,9 @@ logs/
 products/
 _refs/
 sql/
+
+# SAM build artifacts
+.aws-sam/
+
+# Lambda package size-test scratch (vendored deps)
+backend/sizetest/

@@ -1,13 +1,20 @@
 """Trader - Alpaca取引実行モジュール"""
 import os
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from datetime import datetime, timedelta
+from typing import Optional
+
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from datetime import datetime, timedelta
-from typing import Optional
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
+from alpaca.trading.requests import (
+    LimitOrderRequest,
+    MarketOrderRequest,
+    StopLossRequest,
+    TakeProfitRequest,
+)
 
 
 class Trader:
@@ -18,6 +25,11 @@ class Trader:
 
         self.trading_client = TradingClient(api_key, secret_key, paper=paper)
         self.data_client = StockHistoricalDataClient(api_key, secret_key)
+
+        # Alpaca's free (Basic) plan only serves the IEX feed; requesting the
+        # default SIP feed fails with "subscription does not permit querying
+        # recent SIP data". Override with ALPACA_DATA_FEED=sip on a paid plan.
+        self.data_feed = DataFeed(os.getenv("ALPACA_DATA_FEED", "iex").lower())
 
     def get_account(self) -> dict:
         """アカウント情報取得"""
@@ -30,6 +42,22 @@ class Trader:
             "last_equity": float(account.last_equity),
             "daily_pnl": float(account.equity) - float(account.last_equity),
         }
+
+    def get_open_buy_order_symbols(self) -> set:
+        """未約定の「買い」注文が出ている銘柄。
+
+        閉場中の注文は約定するまで買付余力を押さえ続けるため、同じ銘柄に重ねて
+        発注しても Alpaca に弾かれるだけになる。ブラケット注文の損切り・利確は
+        売り注文として残り続けるので、買いだけを対象にする。
+        """
+        try:
+            return {
+                o.symbol for o in self.trading_client.get_orders()
+                if o.side == OrderSide.BUY
+            }
+        except Exception as e:
+            print(f"[Trader] Open orders error: {e}")
+            return set()
 
     def get_positions(self) -> list[dict]:
         """現在のポジション取得"""
@@ -56,6 +84,7 @@ class Trader:
             timeframe=TimeFrame.Day,
             start=start,
             end=end,
+            feed=self.data_feed,
         )
 
         try:
@@ -101,6 +130,21 @@ class Trader:
 
         side = OrderSide.BUY if action == "buy" else OrderSide.SELL
 
+        # 損切り・利確は親注文に紐付けて出す（買いのみ）。
+        # 以前は別々の売り注文として出していたが、同じ株数を2つの売り注文が
+        # 取り合うため2つ目が拒否され、親注文が未約定の間は保有株も無い。
+        # ブラケット/OTO なら約定後に有効化され、片方が約定すればもう片方は取消される。
+        protective = {}
+        if action == "buy":
+            if stop_loss:
+                protective["stop_loss"] = StopLossRequest(stop_price=round(float(stop_loss), 2))
+            if take_profit:
+                protective["take_profit"] = TakeProfitRequest(limit_price=round(float(take_profit), 2))
+        if len(protective) == 2:
+            protective["order_class"] = OrderClass.BRACKET
+        elif protective:
+            protective["order_class"] = OrderClass.OTO
+
         try:
             if order_type == "limit" and limit_price:
                 order_request = LimitOrderRequest(
@@ -109,6 +153,7 @@ class Trader:
                     side=side,
                     time_in_force=TimeInForce.GTC,
                     limit_price=limit_price,
+                    **protective,
                 )
             else:
                 order_request = MarketOrderRequest(
@@ -116,6 +161,7 @@ class Trader:
                     qty=quantity,
                     side=side,
                     time_in_force=TimeInForce.GTC,
+                    **protective,
                 )
 
             order = self.trading_client.submit_order(order_request)
@@ -129,12 +175,9 @@ class Trader:
                 "status": order.status.value,
                 "submitted_at": str(order.submitted_at),
             }
-
-            # stop_loss / take_profit は別注文で発行（bracket order 簡易版）
-            if stop_loss and action == "buy":
-                self._submit_stop_loss(symbol, quantity, stop_loss)
-            if take_profit and action == "buy":
-                self._submit_take_profit(symbol, quantity, take_profit)
+            if protective:
+                print(f"[Trader] {protective['order_class'].value} order: "
+                      f"stop_loss={stop_loss} take_profit={take_profit}")
 
             return result
 
@@ -142,52 +185,17 @@ class Trader:
             print(f"[Trader] Order error: {e}")
             return None
 
-    def _submit_stop_loss(self, symbol: str, quantity: int, stop_price: float):
-        """ストップロス注文（成行のsell stop）"""
-        try:
-            from alpaca.trading.requests import StopOrderRequest
-            order_request = StopOrderRequest(
-                symbol=symbol,
-                qty=quantity,
-                side=OrderSide.SELL,
-                time_in_force=TimeInForce.GTC,
-                stop_price=stop_price,
-            )
-            self.trading_client.submit_order(order_request)
-            print(f"[Trader] Stop loss set: {symbol} @ ${stop_price}")
-        except Exception as e:
-            print(f"[Trader] Stop loss order error: {e}")
-
-    def _submit_take_profit(self, symbol: str, quantity: int, limit_price: float):
-        """テイクプロフィット注文（指値のsell limit）"""
-        try:
-            order_request = LimitOrderRequest(
-                symbol=symbol,
-                qty=quantity,
-                side=OrderSide.SELL,
-                time_in_force=TimeInForce.GTC,
-                limit_price=limit_price,
-            )
-            self.trading_client.submit_order(order_request)
-            print(f"[Trader] Take profit set: {symbol} @ ${limit_price}")
-        except Exception as e:
-            print(f"[Trader] Take profit order error: {e}")
-
     def execute_emergency_liquidation(self) -> list[dict]:
-        """緊急全ポジション清算"""
+        """緊急全ポジション清算
+
+        ブラケット注文の損切り・利確が保有株を押さえているため、先に未約定注文を
+        取り消してから清算する（取り消さないと売り注文が拒否される）。
+        """
         results = []
         try:
-            positions = self.get_positions()
-            for pos in positions:
-                result = self.execute_order(
-                    symbol=pos["symbol"],
-                    action="sell",
-                    quantity=int(pos["qty"]),
-                    order_type="market",
-                )
-                if result:
-                    results.append(result)
-                    print(f"[Trader] Emergency sell: {pos['symbol']} x{int(pos['qty'])}")
+            for r in self.trading_client.close_all_positions(cancel_orders=True):
+                results.append({"symbol": r.symbol, "status": r.status})
+                print(f"[Trader] Emergency close: {r.symbol} (status {r.status})")
         except Exception as e:
             print(f"[Trader] Emergency liquidation error: {e}")
         return results

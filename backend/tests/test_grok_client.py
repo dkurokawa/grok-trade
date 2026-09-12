@@ -210,3 +210,80 @@ class TestCollectMarketReport:
             market_data=mock_market_data, positions=[],
         )
         assert report is None
+
+
+class TestDecide:
+    """DECISION_ENGINE=grok: Grok returns the same TradeDecision shape as Opus,
+    so Risk Guard and execution stay engine-agnostic."""
+
+    @pytest.fixture
+    def client(self):
+        with patch.dict(os.environ, {"GROK_API_KEY": "test_key"}):
+            return GrokClient()
+
+    def _response(self, payload):
+        resp = MagicMock()
+        resp.choices = [MagicMock()]
+        resp.choices[0].message.content = payload
+        return resp
+
+    DECISION = json.dumps({
+        "action": "buy", "symbol": "MSTR", "quantity": 7,
+        "order_type": "market", "limit_price": None,
+        "stop_loss": 120.0, "take_profit": 150.0,
+        "position_size_pct": 30, "reasoning": "dip buy",
+        "risk_assessment": "medium", "confidence": 70, "adjustments": [],
+    })
+
+    def test_returns_trade_decision(self, client, mock_market_data):
+        client.client.chat.completions.create = MagicMock(
+            return_value=self._response(self.DECISION)
+        )
+
+        decision, latency = client.decide(
+            balance=1000.0, positions=[], daily_pnl=0.0, max_daily_loss=500.0,
+            price_data=mock_market_data, grok_report={"sentiment": {"overall": 60}},
+        )
+
+        assert decision["action"] == "buy"
+        assert decision["symbol"] == "MSTR"
+        assert decision["quantity"] == 7
+        assert decision["stop_loss"] == 120.0
+        assert decision["confidence"] == 70
+        assert latency >= 0
+
+    def test_prompt_carries_balance_and_report(self, client, mock_market_data):
+        create = MagicMock(return_value=self._response(self.DECISION))
+        client.client.chat.completions.create = create
+
+        client.decide(
+            balance=1234.0, positions=[], daily_pnl=-10.0, max_daily_loss=500.0,
+            price_data=mock_market_data, grok_report={"sentiment": {"overall": 42}},
+        )
+
+        prompt = create.call_args[1]["messages"][1]["content"]
+        assert "1,234.00" in prompt
+        assert "42" in prompt
+
+    def test_api_error_returns_none(self, client, mock_market_data):
+        client.client.chat.completions.create = MagicMock(side_effect=Exception("API down"))
+
+        decision, latency = client.decide(
+            balance=1000.0, positions=[], daily_pnl=0.0, max_daily_loss=500.0,
+            price_data=mock_market_data, grok_report={},
+        )
+
+        assert decision is None
+        assert latency >= 0
+
+    def test_unparseable_response_returns_none(self, client, mock_market_data):
+        client.client.chat.completions.create = MagicMock(
+            return_value=self._response("no json here")
+        )
+
+        decision, _ = client.decide(
+            balance=1000.0, positions=[], daily_pnl=0.0, max_daily_loss=500.0,
+            price_data=mock_market_data, grok_report={},
+        )
+
+        assert decision is None
