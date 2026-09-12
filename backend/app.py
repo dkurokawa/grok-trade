@@ -58,8 +58,6 @@ def _get_notifier():
     return notifier
 
 
-API_SHARED_SECRET = os.getenv("API_SHARED_SECRET", "")
-
 # DynamoDB rejects Limit < 1; keep the old "any int is accepted" behaviour.
 MAX_LIMIT = 1000
 
@@ -75,10 +73,19 @@ app.add_middleware(
 
 
 def _require_secret(x_api_key: Optional[str]):
-    """Guard mutating endpoints with a shared secret header."""
-    if not API_SHARED_SECRET:
+    """Guard mutating endpoints with a shared secret header.
+
+    The secret is read per request rather than snapshotted at import: if the
+    cold-start SSM fetch failed, caching the empty value would wedge /stop -
+    the kill switch - at 503 for the whole life of that container.
+    """
+    secret = os.getenv("API_SHARED_SECRET", "")
+    if not secret:
+        load_secrets()  # retry SSM; a no-op once it has succeeded
+        secret = os.getenv("API_SHARED_SECRET", "")
+    if not secret:
         raise HTTPException(status_code=503, detail="API secret not configured")
-    if x_api_key != API_SHARED_SECRET:
+    if x_api_key != secret:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 

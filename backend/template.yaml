@@ -69,6 +69,10 @@ Globals:
 Resources:
   TradeTable:
     Type: AWS::DynamoDB::Table
+    # Holds all trade and pipeline history under an explicit TableName, so a
+    # TableName change or a stack rollback would otherwise delete it.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: !Ref TableName
       BillingMode: PAY_PER_REQUEST

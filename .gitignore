@@ -16,6 +16,7 @@ venv/
 *.egg-info/
 dist/
 build/
+.coverage
 coverage.xml
 test-results.xml
 e2e-results.xml

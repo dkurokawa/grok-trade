@@ -96,5 +96,8 @@ def load_secrets():
                     os.environ[name] = param["Value"]
     except Exception as e:  # noqa: BLE001 - surface but don't crash import
         print(f"[config] WARNING: could not load secrets from SSM: {e}")
+        # Leave _loaded False so the next call retries: a transient SSM error
+        # must not disable the bot for the life of the container.
+        return
 
     _loaded = True

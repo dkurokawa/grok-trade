@@ -174,6 +174,7 @@ export default function Dashboard() {
           timestamp: string;
           opus_output?: Decision["parsed_action"];
           opus_skipped?: boolean;
+          risk_guard_passed?: boolean | null;
           risk_guard_reason?: string | null;
           order_submitted?: boolean;
         };
@@ -183,9 +184,14 @@ export default function Dashboard() {
             timestamp: d.timestamp,
             parsed_action: d.opus_output ?? null,
             executed: Boolean(d.order_submitted),
+            // risk_guard_reason は通過した hold にも入るので、
+            // 実際にブロックされたときだけ理由として扱う
             blocked_reason:
-              d.risk_guard_reason ??
-              (d.opus_skipped ? "変化が小さいため判断をスキップ" : null),
+              d.risk_guard_passed === false
+                ? d.risk_guard_reason ?? "リスクガードによりブロック"
+                : d.opus_skipped
+                  ? "変化が小さいため判断をスキップ"
+                  : null,
           }))
         );
       }

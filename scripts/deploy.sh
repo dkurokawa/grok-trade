@@ -117,7 +117,7 @@ cat <<EOF
 デプロイ完了
 
   API URL : $API_URL
-  取引    : 15分ごとに EventBridge Scheduler が起動
+  取引    : 市場時間中 30分ごとに EventBridge Scheduler が起動
 
 ダッシュボード (Vercel) に設定する環境変数:
 

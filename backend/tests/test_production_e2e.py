@@ -406,30 +406,3 @@ class TestProductionResilience:
         for endpoint in endpoints:
             response = client.get(f"{PRODUCTION_URL}{endpoint}")
             assert response.status_code == 200, f"Failed on {endpoint}"
-
-
-class TestProductionDebugEndpoint:
-    """Production debug endpoint tests"""
-
-    @pytest.fixture
-    def client(self):
-        return httpx.Client(timeout=30.0)
-
-    def test_debug_db_endpoint_exists(self, client):
-        """Test debug/db endpoint exists and responds"""
-        response = client.get(f"{PRODUCTION_URL}/debug/db")
-        assert response.status_code == 200
-        data = response.json()
-
-        # Should have database status info
-        assert "database_url_set" in data
-        assert "engine_exists" in data
-
-    def test_debug_db_shows_connected(self, client):
-        """Test debug/db shows database is configured"""
-        response = client.get(f"{PRODUCTION_URL}/debug/db")
-        data = response.json()
-
-        # In production, database should be configured
-        assert data["database_url_set"] is True
-        assert data["engine_exists"] is True

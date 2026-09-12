@@ -70,9 +70,26 @@ def _ready(job: str) -> bool:
     return True
 
 
+async def _alert_startup_failure(job: str, error: Exception):
+    """_ready() raised, so `notifier` may not have been constructed yet."""
+    print(f"[Error] {job} startup failed: {error}")
+    try:
+        await (notifier or DiscordNotifier()).notify_alert(
+            f"{job} startup failed: {error}", "error"
+        )
+    except Exception as e:  # noqa: BLE001 - alerting must not mask the original error
+        print(f"[Discord] Startup failure alert failed: {e}")
+
+
 async def trading_cycle():
     """メイン取引サイクル（30分ごと・4ステージパイプライン）"""
-    if not _ready("trading cycle"):
+    # _ready() constructs the API clients, which raise on missing/invalid keys.
+    # Outside this try, such a failure would end the cycle with no alert at all.
+    try:
+        if not _ready("trading cycle"):
+            return
+    except Exception as e:  # noqa: BLE001
+        await _alert_startup_failure("Trading cycle", e)
         return
 
     cycle_id = str(uuid.uuid4())
@@ -297,7 +314,11 @@ async def trading_cycle():
 
 async def emergency_check():
     """5分間隔でドローダウン監視（AI不要）"""
-    if not _ready("emergency check"):
+    try:
+        if not _ready("emergency check"):
+            return
+    except Exception as e:  # noqa: BLE001
+        await _alert_startup_failure("Emergency check", e)
         return
 
     try:
