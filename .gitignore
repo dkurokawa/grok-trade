@@ -43,3 +43,9 @@ logs/
 products/
 _refs/
 sql/
+
+# SAM build artifacts
+.aws-sam/
+
+# Lambda package size-test scratch (vendored deps)
+backend/sizetest/

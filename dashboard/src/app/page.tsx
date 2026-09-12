@@ -20,7 +20,7 @@ interface Position {
 }
 
 interface Trade {
-  id: number;
+  id: string;
   timestamp: string;
   symbol: string;
   action: string;
@@ -31,15 +31,15 @@ interface Trade {
 }
 
 interface Decision {
-  id: number;
+  id: string;
   timestamp: string;
-  parsed_action: {
+  parsed_action?: {
     action: string;
     symbol: string;
     quantity: number;
     confidence: number;
     reasoning: string;
-  };
+  } | null;
   executed: boolean;
   blocked_reason: string | null;
 }
@@ -136,8 +136,9 @@ export default function Dashboard() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [activeTab, setActiveTab] = useState<"trades" | "decisions">("trades");
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  const TRADING_INTERVAL = 900; // 15分
+  // Lambda Function URL は末尾スラッシュ付きで払い出されるため取り除く
+  const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
+  const TRADING_INTERVAL = 1800; // 30分（市場時間中、毎時0分と30分）
 
   const fetchStatus = async () => {
     try {
@@ -166,7 +167,27 @@ export default function Dashboard() {
       }
       if (decisionsRes.ok) {
         const data = await decisionsRes.json();
-        setDecisions(data.decisions || []);
+        // API はパイプラインログ形式（opus_output / risk_guard_reason / order_submitted）で
+        // 返すので、表示用の形に読み替える
+        type PipelineDecision = {
+          id: string;
+          timestamp: string;
+          opus_output?: Decision["parsed_action"];
+          opus_skipped?: boolean;
+          risk_guard_reason?: string | null;
+          order_submitted?: boolean;
+        };
+        setDecisions(
+          (data.decisions || []).map((d: PipelineDecision) => ({
+            id: d.id,
+            timestamp: d.timestamp,
+            parsed_action: d.opus_output ?? null,
+            executed: Boolean(d.order_submitted),
+            blocked_reason:
+              d.risk_guard_reason ??
+              (d.opus_skipped ? "変化が小さいため判断をスキップ" : null),
+          }))
+        );
       }
     } catch (e) {
       console.error("Failed to fetch history:", e);
@@ -175,9 +196,17 @@ export default function Dashboard() {
 
   const toggleCrawler = async () => {
     try {
-      const endpoint = crawlerRunning ? "/stop" : "/start";
-      const res = await fetch(`${API_URL}${endpoint}`, { method: "POST" });
-      if (!res.ok) throw new Error("Failed to toggle crawler");
+      // 共有シークレットはサーバー側に置くため、Next.js の API ルート経由で叩く
+      const action = crawlerRunning ? "stop" : "start";
+      const res = await fetch("/api/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Failed to toggle crawler");
+      }
       const data = await res.json();
       // APIレスポンスから実際の状態を取得
       if (data.status === "running") {
@@ -190,7 +219,7 @@ export default function Dashboard() {
       }
       setError(null);
     } catch (e) {
-      setError("Failed to toggle crawler");
+      setError(e instanceof Error ? e.message : "Failed to toggle crawler");
       // エラー時は状態を更新しない（現在の状態を維持）
     }
   };

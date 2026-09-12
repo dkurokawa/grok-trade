@@ -1,10 +1,14 @@
-"""Grok API クライアント - 市場情報収集（判断しない）"""
-import os
+"""Grok API クライアント - 市場情報収集 / 売買判断（DECISION_ENGINE=grok 時）"""
 import json
+import os
 import time
-from openai import OpenAI
 from typing import Optional
 
+from openai import OpenAI
+
+# 売買判断は Opus と同じプロンプト・同じ TradeDecision 形式を使う。
+# 形式が揃っていれば Risk Guard 以降の処理はエンジンに依存しない。
+from opus_client import OPUS_PROMPT_TEMPLATE, OPUS_SYSTEM, parse_opus_response
 
 GROK_SYSTEM = """あなたは市場情報アナリストです。
 事実の報告のみ行ってください。売買の推奨は絶対にしないでください。"""
@@ -84,6 +88,49 @@ class GrokClient:
         except Exception as e:
             latency_ms = int((time.time() - start) * 1000)
             print(f"[Grok] API error: {e}")
+            return None, latency_ms
+
+    def decide(
+        self,
+        balance: float,
+        positions: list[dict],
+        daily_pnl: float,
+        max_daily_loss: float,
+        price_data: dict,
+        grok_report: dict,
+    ) -> tuple[Optional[dict], int]:
+        """
+        市場データと自身のレポートから売買判断を返す（OpusClient.analyze と同じ契約）。
+
+        Returns:
+            (decision_dict or None, latency_ms)
+        """
+        prompt = OPUS_PROMPT_TEMPLATE.format(
+            balance=f"{balance:,.2f}",
+            positions=json.dumps(positions, indent=2) if positions else "None",
+            daily_pnl=f"{daily_pnl:+,.2f}",
+            max_daily_loss=f"{max_daily_loss:,.2f}",
+            price_data=json.dumps(price_data, indent=2),
+            grok_report=json.dumps(grok_report, indent=2),
+        )
+
+        start = time.time()
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": OPUS_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=1024,
+                temperature=0.3,
+            )
+            latency_ms = int((time.time() - start) * 1000)
+            return parse_opus_response(response.choices[0].message.content), latency_ms
+
+        except Exception as e:
+            latency_ms = int((time.time() - start) * 1000)
+            print(f"[Grok] Decision API error: {e}")
             return None, latency_ms
 
     def _build_prompt(

@@ -5,7 +5,6 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime
 
 # Set environment before imports
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["ALPACA_API_KEY"] = "test_key"
 os.environ["ALPACA_SECRET_KEY"] = "test_secret"
 os.environ["ALPACA_PAPER"] = "true"
@@ -14,6 +13,13 @@ os.environ["ANTHROPIC_API_KEY"] = "test_anthropic_key"
 os.environ["DISCORD_WEBHOOK_URL"] = ""
 os.environ["MAX_DAILY_LOSS"] = "500"
 os.environ["MAX_POSITION_RATIO"] = "0.5"
+
+
+@pytest.fixture(autouse=True)
+def _pipeline_env(dynamo_table, monkeypatch):
+    """Route the data layer through moto and exercise the Opus decision path."""
+    monkeypatch.setenv("DECISION_ENGINE", "opus")
+    yield
 
 
 def make_mock_grok_report(significant=True, sentiment=60, news=None):
@@ -99,18 +105,18 @@ class TestFullTradingCycle:
     @pytest.mark.asyncio
     async def test_successful_buy_cycle(self, mock_trader, mock_grok, mock_opus, mock_notifier):
         """Test complete successful buy cycle through 4 stages"""
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"), \
-             patch("main.log_trade"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         # Verify 4-stage flow
@@ -130,17 +136,17 @@ class TestFullTradingCycle:
         mock_opus = MagicMock()
         mock_opus.analyze.return_value = (make_mock_opus_decision(action="hold", quantity=0), 500)
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_trader.execute_order.assert_not_called()
@@ -148,19 +154,19 @@ class TestFullTradingCycle:
     @pytest.mark.asyncio
     async def test_risk_blocked_no_trade(self, mock_trader, mock_grok, mock_opus, mock_notifier):
         """Test risk guard blocking trade"""
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(
                 allowed=False, reason="confidence_too_low: 35", adjustments=[]
             )
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_trader.execute_order.assert_not_called()
@@ -170,19 +176,19 @@ class TestFullTradingCycle:
         """Test system stops when health check fails"""
         mock_trader.get_account.return_value["daily_pnl"] = -600.0
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.scheduler") as mock_scheduler:
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.set_scheduler_state") as mock_set_state:
             mock_guard.check_system_health.return_value = MagicMock(
                 allowed=False, reason="Daily loss limit exceeded"
             )
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
-            mock_scheduler.pause.assert_called_once()
+            mock_set_state.assert_called_once_with(False)
 
         mock_notifier.notify_system_stop.assert_called()
 
@@ -197,15 +203,15 @@ class TestFullTradingCycle:
 
         mock_opus = MagicMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         # Opus should NOT be called
@@ -256,18 +262,18 @@ class TestSellCycle:
         mock_notifier.notify_alert = AsyncMock()
         mock_notifier.send_pipeline_log = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"), \
-             patch("main.log_trade"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_trader.execute_order.assert_called_once()
@@ -298,13 +304,13 @@ class TestErrorRecovery:
         mock_notifier.notify_alert = AsyncMock()
         mock_notifier.send_pipeline_log = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard:
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard:
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_trader.execute_order.assert_not_called()
@@ -331,16 +337,16 @@ class TestErrorRecovery:
         mock_notifier.notify_alert = AsyncMock()
         mock_notifier.send_pipeline_log = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_trader.execute_order.assert_not_called()
@@ -368,17 +374,17 @@ class TestErrorRecovery:
         mock_notifier.notify_alert = AsyncMock()
         mock_notifier.send_pipeline_log = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_notifier.notify_alert.assert_called()
@@ -399,13 +405,13 @@ class TestErrorRecovery:
         mock_notifier = MagicMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard:
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard:
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         mock_grok.collect_market_report.assert_not_called()
@@ -452,18 +458,18 @@ class TestMultipleCycles:
         mock_notifier.notify_alert = AsyncMock()
         mock_notifier.send_pipeline_log = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"), \
-             patch("main.log_trade"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()  # Buy
             await trading_cycle()  # Hold
             await trading_cycle()  # Sell
@@ -502,13 +508,13 @@ class TestRiskGuardAdjustments:
         mock_notifier.notify_alert = AsyncMock()
         mock_notifier.send_pipeline_log = AsyncMock()
 
-        with patch("main.trader", mock_trader), \
-             patch("main.grok", mock_grok), \
-             patch("main.opus", mock_opus), \
-             patch("main.notifier", mock_notifier), \
-             patch("main.guard") as mock_guard, \
-             patch("main.log_pipeline"), \
-             patch("main.log_trade"):
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(
                 allowed=True,
@@ -518,7 +524,7 @@ class TestRiskGuardAdjustments:
             )
             mock_guard.max_daily_loss = 500
 
-            from main import trading_cycle
+            from trading_core import trading_cycle
             await trading_cycle()
 
         # Verify risk_guard adjustment log sent

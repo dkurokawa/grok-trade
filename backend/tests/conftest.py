@@ -15,7 +15,45 @@ os.environ.setdefault("ALPACA_PAPER", "true")
 os.environ.setdefault("GROK_API_KEY", "test_grok_key")
 os.environ.setdefault("MAX_DAILY_LOSS", "500")
 os.environ.setdefault("MAX_POSITION_RATIO", "0.5")
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+os.environ.setdefault("ANTHROPIC_API_KEY", "test_anthropic_key")
+os.environ.setdefault("API_SHARED_SECRET", "test_shared_secret")
+os.environ.setdefault("DDB_TABLE", "grok-trade-test")
+# Presence of every secret key lets config.load_secrets() short-circuit without SSM.
+os.environ.setdefault("DISCORD_WEBHOOK_ALERTS", "")
+os.environ.setdefault("DISCORD_WEBHOOK_TRADES", "")
+os.environ.setdefault("SENTRY_DSN", "")
+os.environ.setdefault("AWS_DEFAULT_REGION", "ap-northeast-1")
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
+
+
+@pytest.fixture
+def dynamo_table():
+    """Moto-backed DynamoDB table matching the SAM template schema."""
+    from moto import mock_aws
+
+    with mock_aws():
+        import boto3
+
+        res = boto3.resource("dynamodb", region_name="ap-northeast-1")
+        res.create_table(
+            TableName=os.environ["DDB_TABLE"],
+            BillingMode="PAY_PER_REQUEST",
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
+            KeySchema=[
+                {"AttributeName": "pk", "KeyType": "HASH"},
+                {"AttributeName": "sk", "KeyType": "RANGE"},
+            ],
+        )
+        # Reset the module-level cached table so it binds to the mocked resource.
+        import db.dynamo as dyn
+
+        dyn._table = None
+        yield res.Table(os.environ["DDB_TABLE"])
+        dyn._table = None
 
 
 @pytest.fixture

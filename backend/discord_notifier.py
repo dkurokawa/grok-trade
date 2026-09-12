@@ -1,8 +1,8 @@
 """Discord Webhook通知モジュール - パイプライン全ステージ対応"""
 import os
-import httpx
 from datetime import datetime
 
+import httpx
 
 # ステージ別カラー
 COLOR_GROK = 0x1DA1F2      # Twitter blue
@@ -23,7 +23,7 @@ class DiscordNotifier:
     async def _send_embed(self, webhook_url: str, embed: dict):
         """Webhook にembed送信"""
         if not webhook_url:
-            print(f"[Discord] Webhook URL not set, skipping embed")
+            print("[Discord] Webhook URL not set, skipping embed")
             return
 
         payload = {"embeds": [embed]}
@@ -75,8 +75,9 @@ class DiscordNotifier:
         elif stage == "opus_decision":
             embed["color"] = COLOR_OPUS
             action_emoji = {"buy": "BUY", "sell": "SELL", "hold": "HOLD"}
+            engine = str(data.get("decision_engine", "opus")).capitalize()
             embed["fields"].append({
-                "name": "Opus Decision",
+                "name": f"{engine} Decision",
                 "value": (
                     f"{action_emoji.get(data.get('action', ''), '?')} "
                     f"{data.get('symbol', '')}\n"
@@ -92,7 +93,7 @@ class DiscordNotifier:
                     for a in data["adjustments"]
                 ])
                 embed["fields"].append({
-                    "name": "Opus Self-Adjustments",
+                    "name": f"{engine} Self-Adjustments",
                     "value": adj_text,
                 })
 

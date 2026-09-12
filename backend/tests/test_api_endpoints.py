@@ -1,543 +1,222 @@
-"""API endpoints integration tests - comprehensive edge cases and error handling"""
+"""API endpoint tests for the Lambda API (app.py, FastAPI + Mangum).
+
+Uses a moto-backed DynamoDB table so /trades, /decisions, /pipeline and the
+scheduler state exercise the real data path.
+"""
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-import os
-from unittest.mock import patch, MagicMock, AsyncMock
-from datetime import datetime
-
-# Set environment before imports
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-os.environ["ALPACA_API_KEY"] = "test_key"
-os.environ["ALPACA_SECRET_KEY"] = "test_secret"
-os.environ["ALPACA_PAPER"] = "true"
-os.environ["GROK_API_KEY"] = "test_grok_key"
-os.environ["ANTHROPIC_API_KEY"] = "test_anthropic_key"
-
 from fastapi.testclient import TestClient
+
+import app as app_module
+
+SECRET = "test_shared_secret"  # matches conftest API_SHARED_SECRET
+
+
+@pytest.fixture
+def client(dynamo_table):
+    return TestClient(app_module.app)
+
+
+@pytest.fixture
+def mock_trader(monkeypatch):
+    t = MagicMock()
+    t.get_account.return_value = {
+        "cash": 100000.0,
+        "portfolio_value": 100000.0,
+        "buying_power": 200000.0,
+        "equity": 100000.0,
+        "last_equity": 99500.0,
+        "daily_pnl": 500.0,
+    }
+    t.get_positions.return_value = [
+        {"symbol": "MSTR", "qty": 10.0, "avg_entry_price": 350.0,
+         "market_value": 3600.0, "unrealized_pl": 100.0, "unrealized_plpc": 0.028}
+    ]
+    monkeypatch.setattr(app_module, "trader", t)
+    return t
+
+
+@pytest.fixture(autouse=True)
+def mock_notifier(monkeypatch):
+    n = MagicMock()
+    n.notify_system_stop = AsyncMock()
+    n.notify_alert = AsyncMock()
+    monkeypatch.setattr(app_module, "notifier", n)
+    return n
 
 
 class TestHealthEndpoint:
-    """Health endpoint tests"""
+    def test_returns_ok(self, client):
+        r = client.get("/health")
+        assert r.status_code == 200
+        assert r.json()["status"] == "ok"
 
-    @pytest.fixture
-    def client(self):
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader"), \
-             patch("main.DiscordNotifier"), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from main import app
-            with TestClient(app) as c:
-                yield c
+    def test_includes_timestamp(self, client):
+        assert "timestamp" in client.get("/health").json()
 
-    def test_health_returns_ok(self, client):
-        """Test health endpoint returns OK"""
-        response = client.get("/health")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "ok"
+    def test_includes_scheduler_status(self, client):
+        assert "scheduler_running" in client.get("/health").json()
 
-    def test_health_includes_timestamp(self, client):
-        """Test health response includes timestamp"""
-        response = client.get("/health")
-        data = response.json()
-        assert "timestamp" in data
-
-    def test_health_includes_scheduler_status(self, client):
-        """Test health response includes scheduler status"""
-        response = client.get("/health")
-        data = response.json()
-        assert "scheduler_running" in data
+    def test_reports_decision_engine(self, client, monkeypatch):
+        monkeypatch.setenv("DECISION_ENGINE", "opus")
+        assert client.get("/health").json()["decision_engine"] == "opus"
 
 
 class TestStatusEndpoint:
-    """Status endpoint tests"""
-
-    @pytest.fixture
-    def client(self):
-        mock_trader = MagicMock()
-        mock_trader.get_account.return_value = {
-            "cash": 100000.0,
-            "portfolio_value": 100000.0,
-            "buying_power": 200000.0,
-            "equity": 100000.0,
-            "daily_pnl": 500.0
-        }
-        mock_trader.get_positions.return_value = [
-            {
-                "symbol": "MSTR",
-                "qty": 10.0,
-                "avg_entry_price": 350.0,
-                "market_value": 3600.0,
-                "unrealized_pl": 100.0,
-                "unrealized_plpc": 0.028
-            }
-        ]
-
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader", return_value=mock_trader), \
-             patch("main.DiscordNotifier"), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from importlib import reload
-            import main
-            reload(main)
-            main.trader = mock_trader
-            with TestClient(main.app) as c:
-                yield c
-
-    def test_status_returns_account(self, client):
-        """Test status endpoint returns account info"""
-        response = client.get("/status")
-        assert response.status_code == 200
-        data = response.json()
-        assert "account" in data
+    def test_returns_account_and_positions(self, client, mock_trader):
+        data = client.get("/status").json()
         assert data["account"]["cash"] == 100000.0
-
-    def test_status_returns_positions(self, client):
-        """Test status endpoint returns positions"""
-        response = client.get("/status")
-        data = response.json()
-        assert "positions" in data
-        assert len(data["positions"]) == 1
         assert data["positions"][0]["symbol"] == "MSTR"
-
-    def test_status_returns_scheduler_status(self, client):
-        """Test status endpoint returns scheduler status"""
-        response = client.get("/status")
-        data = response.json()
         assert "scheduler_running" in data
+
+    def test_zero_values(self, client, mock_trader):
+        mock_trader.get_account.return_value = {
+            "cash": 0.0, "portfolio_value": 0.0, "buying_power": 0.0,
+            "equity": 0.0, "last_equity": 0.0, "daily_pnl": 0.0,
+        }
+        mock_trader.get_positions.return_value = []
+        data = client.get("/status").json()
+        assert data["account"]["cash"] == 0.0
+        assert data["positions"] == []
 
 
 class TestStopStartEndpoints:
-    """Stop and Start endpoint tests"""
+    def test_stop_requires_secret(self, client):
+        assert client.post("/stop").status_code == 401
 
-    @pytest.fixture
-    def client(self):
-        mock_notifier = MagicMock()
-        mock_notifier.notify_system_stop = AsyncMock()
-        mock_notifier.notify_alert = AsyncMock()
+    def test_start_requires_secret(self, client):
+        assert client.post("/start").status_code == 401
 
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader"), \
-             patch("main.DiscordNotifier", return_value=mock_notifier), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.set_scheduler_state"), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from importlib import reload
-            import main
-            reload(main)
-            main.notifier = mock_notifier
-            with TestClient(main.app) as c:
-                yield c, mock_notifier
+    def test_wrong_secret_rejected(self, client):
+        assert client.post("/stop", headers={"x-api-key": "nope"}).status_code == 401
 
-    def test_stop_endpoint(self, client):
-        """Test stop endpoint pauses scheduler"""
-        c, mock_notifier = client
-        response = c.post("/stop")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "stopped"
+    def test_stop_then_start_toggles_state(self, client):
+        import db.dynamo as dyn
+        headers = {"x-api-key": SECRET}
 
-    def test_start_endpoint(self, client):
-        """Test start endpoint resumes scheduler"""
-        c, mock_notifier = client
-        response = c.post("/start")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "running"
+        assert client.post("/stop", headers=headers).json()["status"] == "stopped"
+        assert dyn.get_scheduler_state() is False
+
+        assert client.post("/start", headers=headers).json()["status"] == "running"
+        assert dyn.get_scheduler_state() is True
+
+    def test_stop_notifies(self, client, mock_notifier):
+        client.post("/stop", headers={"x-api-key": SECRET})
+        mock_notifier.notify_system_stop.assert_awaited_once()
 
 
 class TestTradesEndpoint:
-    """Trades endpoint tests"""
+    def test_returns_seeded_trade(self, client):
+        import db.dynamo as dyn
+        dyn.log_trade(
+            cycle_id="c1", symbol="MSTR", action="buy", quantity=10.0, price=350.0,
+            order_type="market", status="filled", alpaca_order_id="o-1",
+            stop_loss=330.0, take_profit=400.0,
+        )
+        trades = client.get("/trades").json()["trades"]
+        assert len(trades) == 1
+        assert trades[0]["symbol"] == "MSTR"
+        assert trades[0]["stop_loss"] == 330.0
+        assert trades[0]["cycle_id"] == "c1"
 
-    @pytest.fixture
-    def mock_session(self):
-        """Create mock session with trades"""
-        from db.models import Trade
+    def test_empty(self, client):
+        assert client.get("/trades").json()["trades"] == []
 
-        mock_trades = [
-            MagicMock(
-                id=1,
-                timestamp=datetime(2024, 1, 15, 10, 30),
-                cycle_id="cycle-1",
-                symbol="MSTR",
-                action="buy",
-                quantity=10.0,
-                price=350.0,
-                order_type="market",
-                status="filled",
-                alpaca_order_id="order-1",
-                stop_loss=330.0,
-                take_profit=400.0,
-            ),
-            MagicMock(
-                id=2,
-                timestamp=datetime(2024, 1, 15, 14, 0),
-                cycle_id="cycle-2",
-                symbol="TSLA",
-                action="sell",
-                quantity=5.0,
-                price=250.0,
-                order_type="market",
-                status="filled",
-                alpaca_order_id="order-2",
-                stop_loss=None,
-                take_profit=None,
-            )
-        ]
-
-        mock_query = MagicMock()
-        mock_query.order_by.return_value.limit.return_value.all.return_value = mock_trades
-
-        mock_session = MagicMock()
-        mock_session.query.return_value = mock_query
-
-        return mock_session
-
-    @pytest.fixture
-    def client(self, mock_session):
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader"), \
-             patch("main.DiscordNotifier"), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.get_session", return_value=mock_session), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from importlib import reload
-            import main
-            reload(main)
-            with TestClient(main.app) as c:
-                yield c
-
-    def test_trades_returns_list(self, client):
-        """Test trades endpoint returns list"""
-        response = client.get("/trades")
-        assert response.status_code == 200
-        data = response.json()
-        assert "trades" in data
-        assert isinstance(data["trades"], list)
-
-    def test_trades_with_limit(self, client):
-        """Test trades endpoint respects limit parameter"""
-        response = client.get("/trades?limit=10")
-        assert response.status_code == 200
-
-    def test_trades_default_limit(self, client):
-        """Test trades endpoint has default limit of 50"""
-        response = client.get("/trades")
-        assert response.status_code == 200
+    def test_with_limit(self, client):
+        assert client.get("/trades?limit=10").status_code == 200
 
 
 class TestDecisionsEndpoint:
-    """Decisions endpoint tests"""
+    def test_returns_seeded_decision(self, client):
+        import db.dynamo as dyn
+        dyn.log_pipeline(
+            cycle_id="c1", decision_engine="grok",
+            opus_output={"action": "hold", "confidence": 60},
+            rg_passed=True, order_submitted=False,
+        )
+        decisions = client.get("/decisions").json()["decisions"]
+        assert len(decisions) == 1
+        assert decisions[0]["opus_output"]["action"] == "hold"
+        assert decisions[0]["decision_engine"] == "grok"
 
-    @pytest.fixture
-    def mock_session(self):
-        """Create mock session with pipeline logs (decisions now read from PipelineLog)"""
-        mock_logs = [
-            MagicMock(
-                id=1,
-                cycle_id="cycle-abc",
-                timestamp=datetime(2024, 1, 15, 10, 0),
-                opus_skipped=False,
-                opus_output={"action": "buy", "symbol": "MSTR", "confidence": 75},
-                risk_guard_passed=True,
-                risk_guard_reason=None,
-                order_submitted=True,
-            ),
-            MagicMock(
-                id=2,
-                cycle_id="cycle-def",
-                timestamp=datetime(2024, 1, 15, 10, 15),
-                opus_skipped=True,
-                opus_output=None,
-                risk_guard_passed=None,
-                risk_guard_reason=None,
-                order_submitted=False,
-            ),
-        ]
-
-        mock_query = MagicMock()
-        mock_query.order_by.return_value.limit.return_value.all.return_value = mock_logs
-
-        mock_session = MagicMock()
-        mock_session.query.return_value = mock_query
-
-        return mock_session
-
-    @pytest.fixture
-    def client(self, mock_session):
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader"), \
-             patch("main.DiscordNotifier"), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.get_session", return_value=mock_session), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from importlib import reload
-            import main
-            reload(main)
-            with TestClient(main.app) as c:
-                yield c
-
-    def test_decisions_returns_list(self, client):
-        """Test decisions endpoint returns list"""
-        response = client.get("/decisions")
-        assert response.status_code == 200
-        data = response.json()
-        assert "decisions" in data
-        assert isinstance(data["decisions"], list)
-
-    def test_decisions_with_limit(self, client):
-        """Test decisions endpoint respects limit parameter"""
-        response = client.get("/decisions?limit=10")
-        assert response.status_code == 200
+    def test_with_limit(self, client):
+        assert client.get("/decisions?limit=10").status_code == 200
 
 
-class TestDatabaseUnavailable:
-    """Tests when database is unavailable"""
+class TestPipelineEndpoint:
+    def test_returns_full_cycle(self, client):
+        import db.dynamo as dyn
+        dyn.log_pipeline(
+            cycle_id="c1", decision_engine="grok",
+            grok_output={"sentiment": {"overall": 55}}, grok_latency_ms=120,
+            opus_output={"action": "buy"}, opus_latency_ms=700,
+            rg_passed=True, order_submitted=True, alpaca_order_id="o-1",
+        )
+        logs = client.get("/pipeline").json()["logs"]
+        assert logs[0]["grok_output"]["sentiment"]["overall"] == 55
+        assert logs[0]["grok_latency_ms"] == 120
+        assert logs[0]["alpaca_order_id"] == "o-1"
 
-    @pytest.fixture
-    def client(self):
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader"), \
-             patch("main.DiscordNotifier"), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from importlib import reload
-            import main
-            reload(main)
-            original_get_session = main.get_session
-            main.get_session = lambda: None
-            with TestClient(main.app) as c:
-                yield c
-            main.get_session = original_get_session
-
-    def test_trades_db_unavailable(self, client):
-        """Test trades endpoint when DB is unavailable"""
-        response = client.get("/trades")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["trades"] == []
-        assert "error" in data
-
-    def test_decisions_db_unavailable(self, client):
-        """Test decisions endpoint when DB is unavailable"""
-        response = client.get("/decisions")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["decisions"] == []
-        assert "error" in data
+    def test_empty(self, client):
+        assert client.get("/pipeline").json()["logs"] == []
 
 
 class TestDatabaseError:
-    """Tests when database query fails"""
+    """A DynamoDB failure must not 500 the dashboard."""
 
     @pytest.fixture
-    def client(self):
-        mock_error_session = MagicMock()
-        mock_error_session.query.side_effect = Exception("Database connection error")
-        mock_error_session.close = MagicMock()
+    def broken_db(self, monkeypatch):
+        def boom(*a, **kw):
+            raise RuntimeError("Database connection error")
 
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader"), \
-             patch("main.DiscordNotifier"), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from importlib import reload
-            import main
-            reload(main)
-            original_get_session = main.get_session
-            main.get_session = lambda: mock_error_session
-            with TestClient(main.app) as c:
-                yield c
-            main.get_session = original_get_session
+        import db.dynamo as dyn
+        monkeypatch.setattr(dyn, "_get_table", boom)
+        monkeypatch.setattr(app_module, "get_trades", boom)
+        monkeypatch.setattr(app_module, "get_decisions", boom)
+        monkeypatch.setattr(app_module, "get_pipeline_logs", boom)
 
-    def test_trades_db_error(self, client):
-        """Test trades endpoint handles DB error"""
-        response = client.get("/trades")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["trades"] == []
-        assert "error" in data
+    def test_trades_error(self, client, broken_db):
+        body = client.get("/trades").json()
+        assert body["trades"] == [] and "error" in body
 
-    def test_decisions_db_error(self, client):
-        """Test decisions endpoint handles DB error"""
-        response = client.get("/decisions")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["decisions"] == []
-        assert "error" in data
+    def test_decisions_error(self, client, broken_db):
+        body = client.get("/decisions").json()
+        assert body["decisions"] == [] and "error" in body
 
-
-class TestCORSHeaders:
-    """CORS configuration tests"""
-
-    @pytest.fixture
-    def client(self):
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader"), \
-             patch("main.DiscordNotifier"), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from importlib import reload
-            import main
-            reload(main)
-            with TestClient(main.app) as c:
-                yield c
-
-    def test_cors_allows_any_origin(self, client):
-        """Test CORS allows any origin"""
-        response = client.options(
-            "/health",
-            headers={"Origin": "https://example.com", "Access-Control-Request-Method": "GET"}
-        )
-        # FastAPI TestClient may not fully simulate CORS, check status
-        assert response.status_code in [200, 405]
-
-    def test_cors_allows_methods(self, client):
-        """Test CORS allows various methods"""
-        # GET
-        response = client.get("/health")
-        assert response.status_code == 200
-
-        # POST
-        response = client.post("/stop")
-        assert response.status_code == 200
+    def test_pipeline_error(self, client, broken_db):
+        body = client.get("/pipeline").json()
+        assert body["logs"] == [] and "error" in body
 
 
 class TestEdgeCases:
-    """Edge case tests for API endpoints"""
-
-    @pytest.fixture
-    def mock_trader(self):
-        mock = MagicMock()
-        mock.get_account.return_value = {
-            "cash": 0.0,
-            "portfolio_value": 0.0,
-            "buying_power": 0.0,
-            "equity": 0.0,
-            "daily_pnl": 0.0
-        }
-        mock.get_positions.return_value = []
-        return mock
-
-    @pytest.fixture
-    def client(self, mock_trader):
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader", return_value=mock_trader), \
-             patch("main.DiscordNotifier"), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from importlib import reload
-            import main
-            reload(main)
-            main.trader = mock_trader
-            with TestClient(main.app) as c:
-                yield c
-
-    def test_status_with_zero_values(self, client):
-        """Test status endpoint with zero values"""
-        response = client.get("/status")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["account"]["cash"] == 0.0
-
-    def test_status_empty_positions(self, client):
-        """Test status endpoint with empty positions"""
-        response = client.get("/status")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["positions"] == []
-
     def test_invalid_limit_parameter(self, client):
-        """Test trades endpoint with invalid limit"""
-        # String instead of int
-        response = client.get("/trades?limit=abc")
-        assert response.status_code == 422  # Validation error
+        assert client.get("/trades?limit=abc").status_code == 422
 
-    def test_negative_limit_parameter(self, client):
-        """Test trades endpoint with negative limit"""
-        response = client.get("/trades?limit=-10")
-        assert response.status_code == 200  # FastAPI accepts negative, DB handles it
-
-    def test_zero_limit_parameter(self, client):
-        """Test trades endpoint with zero limit"""
-        response = client.get("/trades?limit=0")
-        assert response.status_code == 200
-
-    def test_large_limit_parameter(self, client):
-        """Test trades endpoint with very large limit"""
-        response = client.get("/trades?limit=1000000")
-        assert response.status_code == 200
+    @pytest.mark.parametrize("limit", [-10, 0, 1000000])
+    def test_out_of_range_limits_are_clamped(self, client, limit):
+        assert client.get(f"/trades?limit={limit}").status_code == 200
 
     def test_nonexistent_endpoint(self, client):
-        """Test nonexistent endpoint returns 404"""
-        response = client.get("/nonexistent")
-        assert response.status_code == 404
+        assert client.get("/nonexistent").status_code == 404
 
     def test_wrong_method(self, client):
-        """Test wrong HTTP method returns 405"""
-        response = client.post("/health")
-        assert response.status_code == 405
+        assert client.post("/health").status_code == 405
+        assert client.get("/stop").status_code == 405
 
-        response = client.get("/stop")
-        assert response.status_code == 405
+    def test_cors_preflight(self, client):
+        r = client.options(
+            "/health",
+            headers={"Origin": "https://example.com", "Access-Control-Request-Method": "GET"},
+        )
+        assert r.status_code in (200, 405)
 
 
 class TestMultipleRequests:
-    """Tests for multiple concurrent requests"""
-
-    @pytest.fixture
-    def client(self):
-        mock_trader = MagicMock()
-        mock_trader.get_account.return_value = {
-            "cash": 100000.0,
-            "portfolio_value": 100000.0,
-            "buying_power": 200000.0,
-            "equity": 100000.0,
-            "daily_pnl": 0.0
-        }
-        mock_trader.get_positions.return_value = []
-
-        with patch("main.GrokClient"), \
-             patch("main.OpusClient"), \
-             patch("main.Trader", return_value=mock_trader), \
-             patch("main.DiscordNotifier"), \
-             patch("main.init_db"), \
-             patch("main.get_scheduler_state", return_value=True), \
-             patch("main.trading_cycle", new_callable=AsyncMock):
-            from importlib import reload
-            import main
-            reload(main)
-            main.trader = mock_trader
-            with TestClient(main.app) as c:
-                yield c
-
-    def test_multiple_health_checks(self, client):
-        """Test multiple rapid health checks"""
+    def test_repeated_health_checks(self, client):
         for _ in range(10):
-            response = client.get("/health")
-            assert response.status_code == 200
+            assert client.get("/health").status_code == 200
 
-    def test_multiple_status_checks(self, client):
-        """Test multiple rapid status checks"""
+    def test_repeated_status_checks(self, client, mock_trader):
         for _ in range(10):
-            response = client.get("/status")
-            assert response.status_code == 200
+            assert client.get("/status").status_code == 200

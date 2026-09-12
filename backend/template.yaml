@@ -1,0 +1,154 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Grok Trade Bot - serverless.
+  EventBridge Scheduler -> pipeline Lambda (Grok report -> Grok/Opus decision -> Risk Guard -> Alpaca);
+  Function URL -> API Lambda; DynamoDB (on-demand).
+
+Parameters:
+  AlpacaPaper:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Use Alpaca paper trading.
+  AlpacaDataFeed:
+    Type: String
+    Default: iex
+    AllowedValues: [iex, sip]
+    Description: Market data feed. The free Alpaca plan only serves iex.
+  DecisionEngine:
+    Type: String
+    Default: grok
+    AllowedValues: [grok, opus]
+    Description: >
+      Which model makes the Stage 2 trade decision.
+      grok = Grok decides from its own report; opus = Claude Opus decides (needs ANTHROPIC_API_KEY in SSM).
+  GrokModel:
+    Type: String
+    Default: grok-3-mini
+  MaxDailyLoss:
+    Type: String
+    Default: "500"
+  MaxPositionRatio:
+    Type: String
+    Default: "0.5"
+  MaxSingleTradePct:
+    Type: String
+    Default: "0.25"
+  MinConfidence:
+    Type: String
+    Default: "40"
+    Description: Risk Guard blocks decisions below this confidence.
+  TableName:
+    Type: String
+    Default: grok-trade
+  SsmPrefix:
+    Type: String
+    Default: /grok-trade
+    Description: SSM Parameter Store prefix holding the SecureString secrets.
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Architectures: [x86_64]
+    CodeUri: ./
+    Environment:
+      Variables:
+        ENVIRONMENT: production
+        DDB_TABLE: !Ref TableName
+        SSM_PREFIX: !Ref SsmPrefix
+        ALPACA_PAPER: !Ref AlpacaPaper
+        ALPACA_DATA_FEED: !Ref AlpacaDataFeed
+        DECISION_ENGINE: !Ref DecisionEngine
+        GROK_MODEL: !Ref GrokModel
+        MAX_DAILY_LOSS: !Ref MaxDailyLoss
+        MAX_POSITION_RATIO: !Ref MaxPositionRatio
+        MAX_SINGLE_TRADE_PCT: !Ref MaxSingleTradePct
+        MIN_CONFIDENCE: !Ref MinConfidence
+
+Resources:
+  TradeTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  # Scheduled jobs (EventBridge Scheduler -> Lambda). Market hours only, New York time.
+  TradingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: grok-trade-trading
+      Handler: lambda_trading.handler
+      Timeout: 180   # two model calls (report + decision) plus Alpaca round-trips
+      MemorySize: 512
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TableName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParametersByPath
+                - ssm:GetParameter
+                - ssm:GetParameters
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}*"
+      Events:
+        # 9:00-15:30 on the hour and half hour. The old APScheduler setup also
+        # registered a separate 15:30 job, so 15:30 ran twice; this runs it once.
+        TradingCycle:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0,30 9-15 ? * MON-FRI *)
+            ScheduleExpressionTimezone: America/New_York
+            Input: '{"task": "trading_cycle"}'
+        EmergencyCheck:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0/5 9-15 ? * MON-FRI *)
+            ScheduleExpressionTimezone: America/New_York
+            Input: '{"task": "emergency_check"}'
+    Metadata:
+      BuildMethod: makefile   # cross-compiles Linux wheels without Docker
+
+  # Dashboard-facing API (Function URL -> Lambda, FastAPI via Mangum)
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: grok-trade-api
+      Handler: app.handler
+      Timeout: 30
+      MemorySize: 256
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins: ["*"]
+          AllowMethods: ["*"]
+          AllowHeaders: ["*"]
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TableName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParametersByPath
+                - ssm:GetParameter
+                - ssm:GetParameters
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}*"
+    Metadata:
+      BuildMethod: makefile   # cross-compiles Linux wheels without Docker
+
+Outputs:
+  ApiUrl:
+    Description: Function URL for the dashboard API (set as NEXT_PUBLIC_API_URL).
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  TableName:
+    Value: !Ref TableName

@@ -3,14 +3,18 @@ name: Scheduled Health Check
 on:
   schedule:
     # 毎時実行（本番環境のヘルスチェック）
-    # JST 10:00-翌5:00 = UTC 1:00-20:00 (米国市場時間帯)
     - cron: "0 * * * *"
     # 毎日 JST 22:30 (米国市場終了前) に E2E テスト実行
     - cron: "30 13 * * 1-5"
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write # OIDC for AWS credentials
+
 env:
-  PRODUCTION_URL: https://grok-trade-bot.fly.dev
+  AWS_REGION: ap-northeast-1
+  SAM_STACK_NAME: grok-trade
   DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_ALERTS }}
 
 jobs:
@@ -19,15 +23,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check API health
-        id: health
-        run: |
-          if [ -z "$PRODUCTION_URL" ]; then
-            echo "⚠️ PRODUCTION_API_URL not configured"
-            exit 0
-          fi
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$PRODUCTION_URL/health" --max-time 30)
+      - name: Resolve API URL from stack output
+        id: url
+        run: |
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name "$SAM_STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+            --output text)
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Check API health
+        env:
+          API_URL: ${{ steps.url.outputs.api_url }}
+        run: |
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL%/}/health" --max-time 30)
           echo "HTTP Status: $RESPONSE"
 
           if [ "$RESPONSE" = "200" ]; then
@@ -38,12 +54,31 @@ jobs:
           fi
 
       - name: Check scheduler status
+        env:
+          API_URL: ${{ steps.url.outputs.api_url }}
         run: |
-          HEALTH_BODY=$(curl -sf "$PRODUCTION_URL/health" --max-time 30)
+          HEALTH_BODY=$(curl -sf "${API_URL%/}/health" --max-time 30)
           echo "Health response: $HEALTH_BODY"
+          echo "Scheduler running: $(echo "$HEALTH_BODY" | jq -r '.scheduler_running')"
 
-          SCHEDULER=$(echo "$HEALTH_BODY" | jq -r '.scheduler_running')
-          echo "Scheduler running: $SCHEDULER"
+      - name: Verify the trading schedule actually fired
+        run: |
+          # EventBridge Scheduler drives the 15-min cycle; if the Lambda has not
+          # been invoked in the last hour something upstream is broken.
+          INVOCATIONS=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/Lambda \
+            --metric-name Invocations \
+            --dimensions Name=FunctionName,Value=grok-trade-trading \
+            --start-time "$(date -u -d '1 hour ago' '+%Y-%m-%dT%H:%M:%SZ')" \
+            --end-time "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+            --period 3600 --statistics Sum \
+            --region "$AWS_REGION" \
+            --query 'Datapoints[0].Sum' --output text)
+          echo "Trading Lambda invocations in last hour: $INVOCATIONS"
+          if [ "$INVOCATIONS" = "None" ] || [ -z "$INVOCATIONS" ]; then
+            echo "⚠️ No trading Lambda invocations in the last hour"
+            exit 1
+          fi
 
       - name: Notify on failure
         if: failure()
@@ -63,6 +98,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve API URL from stack output
+        id: url
+        run: |
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name "$SAM_STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+            --output text)
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -79,7 +130,7 @@ jobs:
       - name: Run E2E Tests
         working-directory: backend
         env:
-          PRODUCTION_API_URL: https://grok-trade-bot.fly.dev
+          PRODUCTION_API_URL: ${{ steps.url.outputs.api_url }}
         run: |
           pytest tests/test_production_e2e.py -v --tb=short
 
