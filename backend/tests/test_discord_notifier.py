@@ -60,7 +60,11 @@ class TestSendPipelineLog:
             return DiscordNotifier()
 
     @pytest.mark.asyncio
-    async def test_grok_stage(self, notifier):
+    async def test_grok_stage_is_silent_when_normal(self, notifier):
+        """平常時のレポートは通知しない。
+
+        市場時間中は毎サイクル（1日14回）届くため、読まれない定常ノイズだった。
+        """
         with patch.object(notifier, "_send_embed", new_callable=AsyncMock) as mock:
             data = {
                 "sentiment": {"overall": 45},
@@ -68,10 +72,7 @@ class TestSendPipelineLog:
                 "breaking_news": ["Fed decision"],
             }
             await notifier.send_pipeline_log("abc12345-uuid", "grok", data)
-            mock.assert_called_once()
-            embed = mock.call_args.args[1]
-            assert embed["color"] == 0x1DA1F2
-            assert any("Grok Report" in f["name"] for f in embed["fields"])
+            mock.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_grok_stage_with_warning(self, notifier):
@@ -83,8 +84,12 @@ class TestSendPipelineLog:
                 "_warning": "extreme_sentiment_may_be_hallucination",
             }
             await notifier.send_pipeline_log("abc12345", "grok", data)
+            mock.assert_called_once()
             embed = mock.call_args.args[1]
+            assert embed["color"] == 0x1DA1F2
             assert any("Warning" in f["name"] for f in embed["fields"])
+            # 異常時は判断材料としてセンチメントも残す
+            assert any("Grok Report" in f["name"] for f in embed["fields"])
 
     @pytest.mark.asyncio
     async def test_opus_decision_stage(self, notifier):

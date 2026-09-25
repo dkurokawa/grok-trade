@@ -56,8 +56,18 @@ class DiscordNotifier:
         }
 
         if stage == "grok":
+            # 平常時のレポートは通知しない。市場時間中は毎サイクル届くため
+            # （1日14回）、読まれない定常ノイズになる。バリデータが異常を
+            # 立てたときだけ、判断材料としてセンチメントごと送る。
+            if not data.get("_warning"):
+                return
+
             embed["color"] = COLOR_GROK
             sentiment = data.get("sentiment", {})
+            embed["fields"].append({
+                "name": "Warning",
+                "value": data["_warning"],
+            })
             embed["fields"].append({
                 "name": "Grok Report",
                 "value": (
@@ -66,11 +76,6 @@ class DiscordNotifier:
                     f"News: {len(data.get('breaking_news', []))} items"
                 ),
             })
-            if data.get("_warning"):
-                embed["fields"].append({
-                    "name": "Warning",
-                    "value": data["_warning"],
-                })
 
         elif stage == "opus_decision":
             embed["color"] = COLOR_OPUS
