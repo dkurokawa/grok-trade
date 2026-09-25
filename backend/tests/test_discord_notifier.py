@@ -159,12 +159,14 @@ class TestSendPipelineLog:
             assert any("Executed" in f["name"] for f in embed["fields"])
 
     @pytest.mark.asyncio
-    async def test_skip_stage(self, notifier):
+    async def test_skip_stage_is_silent(self, notifier):
+        """スキップは平常運転なので通知しない。
+
+        変化が小さいサイクルが大半を占めるため、通知の大半がこれだった。
+        """
         with patch.object(notifier, "_send_embed", new_callable=AsyncMock) as mock:
             await notifier.send_pipeline_log("abc12345", "skip", {})
-            embed = mock.call_args.args[1]
-            assert embed["color"] == 0x6B7280
-            assert any("Skipped" in f["name"] for f in embed["fields"])
+            mock.assert_not_called()
 
 
 class TestNotifyTrade:

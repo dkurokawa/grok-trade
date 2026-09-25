@@ -10,7 +10,6 @@ COLOR_OPUS = 0xD97706      # Opus orange
 COLOR_BLOCKED = 0xEF4444   # Red
 COLOR_ADJUSTED = 0xF59E0B  # Yellow
 COLOR_EXECUTED = 0x22C55E  # Green
-COLOR_SKIP = 0x6B7280      # Gray
 COLOR_ALERT = 0xEF4444     # Red
 COLOR_INFO = 0x3B82F6      # Blue
 
@@ -49,6 +48,16 @@ class DiscordNotifier:
 
     async def send_pipeline_log(self, cycle_id: str, stage: str, data: dict):
         """パイプラインの各ステージをDiscordにログ"""
+        # 平常運転の報告は配信しない。市場時間中は毎サイクル届くため（1日14回）、
+        # 読まれない定常ノイズになる。記録は DynamoDB と /pipeline に残るので
+        # 履歴は欠けない。
+        if stage == "skip":
+            return
+        if stage == "grok" and not data.get("_warning"):
+            # レポートはバリデータが異常を立てたときだけ、判断材料として
+            # センチメントごと送る。
+            return
+
         embed = {
             "title": f"Cycle {cycle_id[:8]}",
             "timestamp": datetime.utcnow().isoformat(),
@@ -56,12 +65,6 @@ class DiscordNotifier:
         }
 
         if stage == "grok":
-            # 平常時のレポートは通知しない。市場時間中は毎サイクル届くため
-            # （1日14回）、読まれない定常ノイズになる。バリデータが異常を
-            # 立てたときだけ、判断材料としてセンチメントごと送る。
-            if not data.get("_warning"):
-                return
-
             embed["color"] = COLOR_GROK
             sentiment = data.get("sentiment", {})
             embed["fields"].append({
@@ -128,13 +131,6 @@ class DiscordNotifier:
                     f"Order: {data.get('alpaca_order_id', 'N/A')}\n"
                     f"Status: {data.get('status', 'unknown')}"
                 ),
-            })
-
-        elif stage == "skip":
-            embed["color"] = COLOR_SKIP
-            embed["fields"].append({
-                "name": "Opus Skipped",
-                "value": "Grok: no significant change",
             })
 
         await self._send_embed(self.webhook_trades, embed)
