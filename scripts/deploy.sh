@@ -27,7 +27,7 @@ ok "AWS アカウント $ACCOUNT / リージョン $REGION"
 
 # ------------------------------------------------------------ 2. シークレット
 step "2/5 シークレット (SSM Parameter Store)"
-REQUIRED=(GROK_API_KEY ALPACA_API_KEY ALPACA_SECRET_KEY)
+REQUIRED=(GROK_API_KEY ALPACA_API_KEY ALPACA_SECRET_KEY API_SHARED_SECRET)
 EXISTING=$(aws ssm get-parameters-by-path --region "$REGION" --path "$PREFIX" \
   --query "Parameters[].Name" --output text 2>/dev/null || true)
 
@@ -109,7 +109,16 @@ done
 curl -s "${API_URL%/}/health" --max-time 30; echo
 
 SECRET=$(aws ssm get-parameter --region "$REGION" --name "$PREFIX/API_SHARED_SECRET" \
-  --with-decryption --query Parameter.Value --output text 2>/dev/null || echo "")
+  --with-decryption --query Parameter.Value --output text 2>/dev/null) \
+  || die "API_SHARED_SECRET の取得に失敗した (SSM: $PREFIX/API_SHARED_SECRET)"
+[ -n "$SECRET" ] && [ "$SECRET" != "None" ] \
+  || die "API_SHARED_SECRET が空だった (SSM: $PREFIX/API_SHARED_SECRET)"
+
+STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "x-api-key: $SECRET" \
+  "${API_URL%/}/status" --max-time 30 || echo 000)
+[ "$STATUS_CODE" = "200" ] \
+  || die "/status (x-api-key 付き) が 200 を返さなかった (got $STATUS_CODE)"
+ok "/status (x-api-key 付き) が 200 を返した"
 
 # Never print the decrypted secret itself - length + sha256 prefix are enough
 # to sanity-check it was fetched, without putting the value in a terminal
