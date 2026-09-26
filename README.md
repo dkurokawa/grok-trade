@@ -189,4 +189,4 @@ Stage 2.5（判断の検証）と Stage 3（Risk Guard）が、AI の判断を�
 
 ## ライセンス
 
-Private - 個人利用のみ
+[MIT](LICENSE)
