@@ -55,12 +55,15 @@ jobs:
           fi
 
       - name: Check scheduler status
+        id: scheduler
         env:
           API_URL: ${{ steps.url.outputs.api_url }}
         run: |
           HEALTH_BODY=$(curl -sf "${API_URL%/}/health" --max-time 30)
           echo "Health response: $HEALTH_BODY"
-          echo "Scheduler running: $(echo "$HEALTH_BODY" | jq -r '.scheduler_running')"
+          RUNNING=$(echo "$HEALTH_BODY" | jq -r '.scheduler_running')
+          echo "Scheduler running: $RUNNING"
+          echo "scheduler_running=$RUNNING" >> "$GITHUB_OUTPUT"
 
       - name: Resolve API shared secret from SSM
         id: secret
@@ -88,6 +91,17 @@ jobs:
           # This is meaningful only during the trading session; outside it
           # "no recent run" is expected and alerting on it would page every
           # night and all weekend.
+          #
+          # F5: it's also expected - not an incident - when the bot has been
+          # intentionally paused (scheduler_running=false via /stop, or an
+          # emergency liquidation). trading_cycle() itself skips (and never
+          # writes a PIPELINE log) while paused, so without this check every
+          # intentional pause would page as a false "trading cycle is dead".
+          if [ "${{ steps.scheduler.outputs.scheduler_running }}" = "false" ]; then
+            echo "Scheduler is intentionally stopped (scheduler_running=false) - skipping"
+            exit 0
+          fi
+
           DOW=$(TZ=America/New_York date '+%u')
           HOUR=$(TZ=America/New_York date '+%-H')
           if [ "$DOW" -gt 5 ] || [ "$HOUR" -lt 10 ] || [ "$HOUR" -gt 16 ]; then

@@ -235,13 +235,38 @@ jobs:
           echo "API URL: $API_URL"
           echo "API_URL=$API_URL" >> "$GITHUB_ENV"
 
-      - name: Smoke test deployed API
+      - name: Resolve API shared secret from SSM
+        id: secret
         run: |
+          SECRET=$(aws ssm get-parameter --region "$AWS_REGION" \
+            --name "/grok-trade/API_SHARED_SECRET" \
+            --with-decryption --query Parameter.Value --output text)
+          echo "::add-mask::$SECRET"
+          echo "api_shared_secret=$SECRET" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test deployed API
+        env:
+          API_SHARED_SECRET: ${{ steps.secret.outputs.api_shared_secret }}
+        run: |
+          # F7: deploy.sh の手動デプロイと同じ基準で確認する - HTTP 200 では
+          # なく /health の status が "ok" であること (secrets 未設定の
+          # "degraded" は 200 を返すので、コード自体だけでは検出できない)。
           for i in 1 2 3 4 5; do
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL%/}/health" --max-time 30 || echo 000)
-            echo "attempt $i -> $CODE"
-            [ "$CODE" = "200" ] && exit 0
+            HEALTH_BODY=$(curl -sf "${API_URL%/}/health" --max-time 30 || echo "")
+            STATUS=$(echo "$HEALTH_BODY" | jq -r '.status // empty' 2>/dev/null || echo "")
+            echo "attempt $i -> status=${STATUS:-<unreachable>}"
+            [ "$STATUS" = "ok" ] && break
+            if [ "$i" = 5 ]; then
+              echo "Health check failed after deploy (status=${STATUS:-<unreachable>})"
+              exit 1
+            fi
             sleep 10
           done
-          echo "Health check failed after deploy"
-          exit 1
+
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "x-api-key: $API_SHARED_SECRET" \
+            "${API_URL%/}/status" --max-time 30 || echo 000)
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "/status (x-api-key 付き) が 200 を返さなかった (got $STATUS_CODE)"
+            exit 1
+          fi
+          echo "/status (x-api-key 付き) が 200 を返した"
