@@ -192,7 +192,17 @@ async def trading_cycle():
         )
 
         # === Stage 3: Risk Guard ===
-        rg_result = guard.check(decision, {"daily_pnl": daily_pnl})
+        # price/equity are resolved here (not just before execution) because
+        # RiskGuard.check() needs them to size a buy in actual shares rather
+        # than trust the AI's requested quantity at face value.
+        symbol = decision.get("symbol")
+        price = market_data.get(symbol, {}).get("price", 0) if symbol else 0
+        rg_result = guard.check(
+            decision,
+            {"daily_pnl": daily_pnl, "positions": positions},
+            price=price,
+            equity=account["equity"],
+        )
 
         if rg_result.adjustments:
             try:
@@ -230,8 +240,7 @@ async def trading_cycle():
             )
             return
 
-        symbol = decision["symbol"]
-        price = market_data.get(symbol, {}).get("price", 0)
+        # symbol/price were already resolved before Stage 3 for RiskGuard.check().
 
         # 発注前の前提チェック（買いのみ）。どちらも満たさない注文は Alpaca に
         # 必ず拒否され、30分ごとに失敗通知が飛び続けるだけになる。

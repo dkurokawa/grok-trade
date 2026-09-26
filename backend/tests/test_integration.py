@@ -64,36 +64,53 @@ class TestRiskGuardTraderIntegration:
 
     def test_risk_check_with_real_trader_data(self, risk_guard, mock_trader_data):
         """Test risk check with realistic trader data"""
-        result = risk_guard.check_order(
-            action="buy", symbol="MSTR", quantity=10, price=350.0,
-            account_balance=mock_trader_data["account"]["cash"],
-            current_positions=mock_trader_data["positions"],
-            daily_pnl=mock_trader_data["account"]["daily_pnl"],
+        decision = {
+            "action": "buy", "confidence": 80, "stop_loss": 300,
+            "position_size_pct": 10, "quantity": 10,
+        }
+        portfolio = {
+            "daily_pnl": mock_trader_data["account"]["daily_pnl"],
+            "positions": mock_trader_data["positions"],
+        }
+        result = risk_guard.check(
+            decision, portfolio, price=350.0, equity=mock_trader_data["account"]["equity"],
         )
         assert result.allowed is True
 
-    def test_risk_blocks_large_order(self, risk_guard, mock_trader_data):
-        """Test that risk guard blocks oversized orders"""
-        result = risk_guard.check_order(
-            action="buy", symbol="MSTR", quantity=200, price=350.0,
-            account_balance=mock_trader_data["account"]["cash"],
-            current_positions=mock_trader_data["positions"],
-            daily_pnl=mock_trader_data["account"]["daily_pnl"],
+    def test_risk_caps_oversized_order_quantity(self, risk_guard, mock_trader_data):
+        """Individual trades are capped at max_single_trade_pct, so an
+        oversized quantity is shrunk rather than outright blocked."""
+        decision = {
+            "action": "buy", "confidence": 80, "stop_loss": 300,
+            "position_size_pct": 50, "quantity": 200,
+        }
+        portfolio = {
+            "daily_pnl": mock_trader_data["account"]["daily_pnl"],
+            "positions": mock_trader_data["positions"],
+        }
+        result = risk_guard.check(
+            decision, portfolio, price=350.0, equity=mock_trader_data["account"]["equity"],
         )
-        assert result.allowed is False
-        assert "Position ratio" in result.reason
+        assert result.allowed is True
+        assert decision["quantity"] < 200
+        assert any(a["field"] == "quantity" for a in result.adjustments)
 
     def test_risk_blocks_after_loss(self, risk_guard, mock_trader_data):
         """Test risk guard blocks trading after significant loss"""
         mock_trader_data["account"]["daily_pnl"] = -600.0
-        result = risk_guard.check_order(
-            action="buy", symbol="MSTR", quantity=1, price=350.0,
-            account_balance=mock_trader_data["account"]["cash"],
-            current_positions=mock_trader_data["positions"],
-            daily_pnl=mock_trader_data["account"]["daily_pnl"],
+        decision = {
+            "action": "buy", "confidence": 80, "stop_loss": 300,
+            "position_size_pct": 10, "quantity": 1,
+        }
+        portfolio = {
+            "daily_pnl": mock_trader_data["account"]["daily_pnl"],
+            "positions": mock_trader_data["positions"],
+        }
+        result = risk_guard.check(
+            decision, portfolio, price=350.0, equity=mock_trader_data["account"]["equity"],
         )
         assert result.allowed is False
-        assert "Daily loss limit" in result.reason
+        assert result.reason == "daily_loss_limit_reached"
 
 
 class TestRiskGuardOpusIntegration:
@@ -110,19 +127,19 @@ class TestRiskGuardOpusIntegration:
 
     def test_opus_buy_with_stop_loss_passes(self, risk_guard):
         decision = _opus_decision(action="buy", confidence=80)
-        result = risk_guard.check(decision, {"daily_pnl": 0})
+        result = risk_guard.check(decision, {"daily_pnl": 0}, price=350.0, equity=100000.0)
         assert result.allowed is True
 
     def test_opus_low_confidence_blocked(self, risk_guard):
         decision = _opus_decision(action="buy", confidence=30)
-        result = risk_guard.check(decision, {"daily_pnl": 0})
+        result = risk_guard.check(decision, {"daily_pnl": 0}, price=350.0, equity=100000.0)
         assert result.allowed is False
         assert "confidence" in result.reason.lower()
 
     def test_opus_buy_no_stop_loss_blocked(self, risk_guard):
         decision = _opus_decision(action="buy")
         decision["stop_loss"] = None
-        result = risk_guard.check(decision, {"daily_pnl": 0})
+        result = risk_guard.check(decision, {"daily_pnl": 0}, price=350.0, equity=100000.0)
         assert result.allowed is False
         assert "stop_loss" in result.reason.lower()
 
