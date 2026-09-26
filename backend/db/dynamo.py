@@ -19,6 +19,7 @@ so the API and dashboard stay unchanged. `decision_engine` records which model
 actually produced the decision, since the "opus_*" fields hold Grok's decision
 when DECISION_ENGINE=grok.
 """
+
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -93,21 +94,33 @@ def _put(pk: str, fields: dict, label: str):
 # Writes
 # --------------------------------------------------------------------------
 def log_trade(
-    cycle_id, symbol, action, quantity, price, order_type, status,
-    alpaca_order_id, stop_loss=None, take_profit=None,
+    cycle_id,
+    symbol,
+    action,
+    quantity,
+    price,
+    order_type,
+    status,
+    alpaca_order_id,
+    stop_loss=None,
+    take_profit=None,
 ):
-    _put("TRADE", {
-        "cycle_id": cycle_id,
-        "symbol": symbol,
-        "action": action,
-        "quantity": quantity,
-        "price": price,
-        "order_type": order_type,
-        "status": status,
-        "alpaca_order_id": alpaca_order_id,
-        "stop_loss": stop_loss,
-        "take_profit": take_profit,
-    }, "Trade")
+    _put(
+        "TRADE",
+        {
+            "cycle_id": cycle_id,
+            "symbol": symbol,
+            "action": action,
+            "quantity": quantity,
+            "price": price,
+            "order_type": order_type,
+            "status": status,
+            "alpaca_order_id": alpaca_order_id,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+        },
+        "Trade",
+    )
 
 
 def log_pipeline(
@@ -129,24 +142,28 @@ def log_pipeline(
     execution_result: dict | None = None,
 ):
     """1判断サイクル = 1アイテム（旧 pipeline_log テーブル相当）"""
-    _put("PIPELINE", {
-        "cycle_id": cycle_id,
-        "decision_engine": decision_engine,
-        "grok_input": grok_input,
-        "grok_output": grok_output,
-        "grok_latency_ms": grok_latency_ms,
-        "opus_skipped": opus_skipped,
-        "opus_input": opus_input,
-        "opus_output": opus_output,
-        "opus_latency_ms": opus_latency_ms,
-        "opus_adjustments": opus_adjustments or [],
-        "risk_guard_passed": rg_passed,
-        "risk_guard_reason": rg_reason,
-        "risk_guard_adjustments": rg_adjustments or [],
-        "order_submitted": order_submitted,
-        "alpaca_order_id": alpaca_order_id,
-        "execution_result": execution_result,
-    }, "Pipeline")
+    _put(
+        "PIPELINE",
+        {
+            "cycle_id": cycle_id,
+            "decision_engine": decision_engine,
+            "grok_input": grok_input,
+            "grok_output": grok_output,
+            "grok_latency_ms": grok_latency_ms,
+            "opus_skipped": opus_skipped,
+            "opus_input": opus_input,
+            "opus_output": opus_output,
+            "opus_latency_ms": opus_latency_ms,
+            "opus_adjustments": opus_adjustments or [],
+            "risk_guard_passed": rg_passed,
+            "risk_guard_reason": rg_reason,
+            "risk_guard_adjustments": rg_adjustments or [],
+            "order_submitted": order_submitted,
+            "alpaca_order_id": alpaca_order_id,
+            "execution_result": execution_result,
+        },
+        "Pipeline",
+    )
 
 
 # --------------------------------------------------------------------------
@@ -166,21 +183,49 @@ def _pick(item: dict, keys: list) -> dict:
 
 
 TRADE_FIELDS = [
-    "id", "timestamp", "cycle_id", "symbol", "action", "quantity", "price",
-    "order_type", "status", "alpaca_order_id", "stop_loss", "take_profit",
+    "id",
+    "timestamp",
+    "cycle_id",
+    "symbol",
+    "action",
+    "quantity",
+    "price",
+    "order_type",
+    "status",
+    "alpaca_order_id",
+    "stop_loss",
+    "take_profit",
 ]
 
 DECISION_FIELDS = [
-    "id", "cycle_id", "timestamp", "decision_engine", "opus_skipped", "opus_output",
-    "risk_guard_passed", "risk_guard_reason", "order_submitted",
+    "id",
+    "cycle_id",
+    "timestamp",
+    "decision_engine",
+    "opus_skipped",
+    "opus_output",
+    "risk_guard_passed",
+    "risk_guard_reason",
+    "order_submitted",
 ]
 
 PIPELINE_FIELDS = [
-    "id", "cycle_id", "timestamp", "decision_engine",
-    "grok_output", "grok_latency_ms",
-    "opus_skipped", "opus_output", "opus_latency_ms", "opus_adjustments",
-    "risk_guard_passed", "risk_guard_reason", "risk_guard_adjustments",
-    "order_submitted", "alpaca_order_id", "execution_result",
+    "id",
+    "cycle_id",
+    "timestamp",
+    "decision_engine",
+    "grok_output",
+    "grok_latency_ms",
+    "opus_skipped",
+    "opus_output",
+    "opus_latency_ms",
+    "opus_adjustments",
+    "risk_guard_passed",
+    "risk_guard_reason",
+    "risk_guard_adjustments",
+    "order_submitted",
+    "alpaca_order_id",
+    "execution_result",
 ]
 
 

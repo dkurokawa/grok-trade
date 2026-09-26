@@ -1,4 +1,5 @@
 """Opus 4.6 クライアント - 最終売買判断エンジン"""
+
 import json
 import os
 import re
@@ -53,9 +54,7 @@ adjustments配列: ポジションサイズ縮小・ストップロス追加・�
 
 class OpusClient:
     def __init__(self):
-        self.client = anthropic.Anthropic(
-            api_key=os.getenv("ANTHROPIC_API_KEY")
-        )
+        self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         self.model = "claude-opus-4-6-20260205"
 
     def analyze(
@@ -73,9 +72,7 @@ class OpusClient:
         Returns:
             (decision_dict or None, latency_ms)
         """
-        prompt = self._build_prompt(
-            balance, positions, daily_pnl, max_daily_loss, price_data, grok_report
-        )
+        prompt = self._build_prompt(balance, positions, daily_pnl, max_daily_loss, price_data, grok_report)
 
         start = time.time()
         try:
@@ -145,7 +142,11 @@ def parse_opus_response(raw: str) -> dict | None:
 
 
 REQUIRED_FIELDS = [
-    "action", "symbol", "quantity", "reasoning", "confidence",
+    "action",
+    "symbol",
+    "quantity",
+    "reasoning",
+    "confidence",
 ]
 
 

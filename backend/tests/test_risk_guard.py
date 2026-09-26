@@ -1,4 +1,5 @@
 """Risk Guard unit tests - comprehensive edge cases including new Opus pipeline checks"""
+
 import os
 from unittest.mock import patch
 
@@ -35,12 +36,15 @@ class TestRiskGuardInit:
             assert guard.min_confidence == 40
 
     def test_custom_env_values(self):
-        with patch.dict(os.environ, {
-            "MAX_DAILY_LOSS": "1000",
-            "MAX_POSITION_RATIO": "0.7",
-            "MAX_SINGLE_TRADE_PCT": "0.3",
-            "MIN_CONFIDENCE": "50",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "MAX_DAILY_LOSS": "1000",
+                "MAX_POSITION_RATIO": "0.7",
+                "MAX_SINGLE_TRADE_PCT": "0.3",
+                "MIN_CONFIDENCE": "50",
+            },
+        ):
             guard = RiskGuard()
             assert guard.max_daily_loss == 1000.0
             assert guard.max_position_pct == 70.0
@@ -57,15 +61,19 @@ class TestRiskGuardInit:
 # New: check() for Opus pipeline
 # ========================
 
+
 class TestCheckOpusPipeline:
     @pytest.fixture
     def guard(self):
-        with patch.dict(os.environ, {
-            "MAX_DAILY_LOSS": "500",
-            "MAX_POSITION_RATIO": "0.5",
-            "MAX_SINGLE_TRADE_PCT": "0.25",
-            "MIN_CONFIDENCE": "40",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "MAX_DAILY_LOSS": "500",
+                "MAX_POSITION_RATIO": "0.5",
+                "MAX_SINGLE_TRADE_PCT": "0.25",
+                "MIN_CONFIDENCE": "40",
+            },
+        ):
             return RiskGuard()
 
     def test_hold_always_passes(self, guard):
@@ -96,8 +104,11 @@ class TestCheckOpusPipeline:
 
     def test_confidence_boundary_40_passes(self, guard):
         decision = {
-            "action": "buy", "confidence": 40, "stop_loss": 100,
-            "position_size_pct": 20, "quantity": 10,
+            "action": "buy",
+            "confidence": 40,
+            "stop_loss": 100,
+            "position_size_pct": 20,
+            "quantity": 10,
         }
         portfolio = {"daily_pnl": 0}
         result = guard.check(decision, portfolio, price=100.0, equity=100000.0)
@@ -126,8 +137,11 @@ class TestCheckOpusPipeline:
 
     def test_position_size_adjusted_to_max(self, guard):
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 100,
-            "position_size_pct": 60, "quantity": 100,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 100,
+            "position_size_pct": 60,
+            "quantity": 100,
         }
         portfolio = {"daily_pnl": 0}
         result = guard.check(decision, portfolio, price=100.0, equity=100000.0)
@@ -140,8 +154,11 @@ class TestCheckOpusPipeline:
 
     def test_position_size_within_limits(self, guard):
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 100,
-            "position_size_pct": 20, "quantity": 50,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 100,
+            "position_size_pct": 20,
+            "quantity": 50,
         }
         portfolio = {"daily_pnl": 0}
         result = guard.check(decision, portfolio, price=100.0, equity=100000.0)
@@ -151,8 +168,11 @@ class TestCheckOpusPipeline:
     def test_position_size_at_single_trade_limit(self, guard):
         """25% は上限ちょうど → 調整なし"""
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 100,
-            "position_size_pct": 25, "quantity": 50,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 100,
+            "position_size_pct": 25,
+            "quantity": 50,
         }
         portfolio = {"daily_pnl": 0}
         result = guard.check(decision, portfolio, price=100.0, equity=100000.0)
@@ -161,8 +181,11 @@ class TestCheckOpusPipeline:
 
     def test_adjustments_logged_correctly(self, guard):
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 100,
-            "position_size_pct": 55, "quantity": 50,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 100,
+            "position_size_pct": 55,
+            "quantity": 50,
         }
         portfolio = {"daily_pnl": 0}
         result = guard.check(decision, portfolio, price=100.0, equity=100000.0)
@@ -174,19 +197,28 @@ class TestCheckOpusPipeline:
 # check(): quantity capped by the confirmed position_size_pct (Issue #2)
 # ========================
 
+
 class TestQuantityCappedByPositionSize:
     @pytest.fixture
     def guard(self):
-        with patch.dict(os.environ, {
-            "MAX_DAILY_LOSS": "500", "MAX_POSITION_RATIO": "0.5",
-            "MAX_SINGLE_TRADE_PCT": "0.25", "MIN_CONFIDENCE": "40",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "MAX_DAILY_LOSS": "500",
+                "MAX_POSITION_RATIO": "0.5",
+                "MAX_SINGLE_TRADE_PCT": "0.25",
+                "MIN_CONFIDENCE": "40",
+            },
+        ):
             return RiskGuard()
 
     def _decision(self, **overrides):
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 100,
-            "position_size_pct": 60, "quantity": 100,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 100,
+            "position_size_pct": 60,
+            "quantity": 100,
         }
         decision.update(overrides)
         return decision
@@ -249,16 +281,24 @@ class TestTotalPositionRatioCap:
 
     @pytest.fixture
     def guard(self):
-        with patch.dict(os.environ, {
-            "MAX_DAILY_LOSS": "500", "MAX_POSITION_RATIO": "0.5",
-            "MAX_SINGLE_TRADE_PCT": "0.25", "MIN_CONFIDENCE": "40",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "MAX_DAILY_LOSS": "500",
+                "MAX_POSITION_RATIO": "0.5",
+                "MAX_SINGLE_TRADE_PCT": "0.25",
+                "MIN_CONFIDENCE": "40",
+            },
+        ):
             return RiskGuard()
 
     def test_within_ratio_allowed(self, guard, empty_positions):
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 100,
-            "position_size_pct": 20, "quantity": 10,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 100,
+            "position_size_pct": 20,
+            "quantity": 10,
         }
         portfolio = {"daily_pnl": 0, "positions": empty_positions}
         result = guard.check(decision, portfolio, price=350.0, equity=100000.0)
@@ -267,8 +307,11 @@ class TestTotalPositionRatioCap:
     def test_existing_positions_push_total_over_limit(self, guard, large_position):
         """large_position の時価だけで既に総資産の40%。新規発注を足すと50%上限を超える。"""
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 100,
-            "position_size_pct": 25, "quantity": 100,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 100,
+            "position_size_pct": 25,
+            "quantity": 100,
         }
         portfolio = {"daily_pnl": 0, "positions": large_position}
         result = guard.check(decision, portfolio, price=350.0, equity=100000.0)
@@ -285,8 +328,11 @@ class TestTotalPositionRatioCap:
         """未約定の買い注文の想定額も総ポジション上限に含める(M2)。別銘柄の
         未約定注文だけで、新規発注と合わせて上限を超えること。"""
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 100,
-            "position_size_pct": 20, "quantity": 10,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 100,
+            "position_size_pct": 20,
+            "quantity": 10,
         }
         # 別銘柄 (TSLA) への未約定注文で $49,000 相当が既に確保されている。
         portfolio = {
@@ -303,8 +349,11 @@ class TestTotalPositionRatioCap:
     def test_open_buy_order_value_defaults_to_zero(self, guard, empty_positions):
         """portfolio に open_buy_order_value が無くても従来どおり動く。"""
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 100,
-            "position_size_pct": 20, "quantity": 10,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 100,
+            "position_size_pct": 20,
+            "quantity": 10,
         }
         portfolio = {"daily_pnl": 0, "positions": empty_positions}
         result = guard.check(decision, portfolio, price=350.0, equity=100000.0)
@@ -318,23 +367,31 @@ class TestEffectiveBuyPrice:
 
     @pytest.fixture
     def guard(self):
-        with patch.dict(os.environ, {
-            "MAX_DAILY_LOSS": "500", "MAX_POSITION_RATIO": "0.5",
-            "MAX_SINGLE_TRADE_PCT": "0.25", "MIN_CONFIDENCE": "40",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "MAX_DAILY_LOSS": "500",
+                "MAX_POSITION_RATIO": "0.5",
+                "MAX_SINGLE_TRADE_PCT": "0.25",
+                "MIN_CONFIDENCE": "40",
+            },
+        ):
             return RiskGuard()
 
     def test_market_order_uses_current_price(self, guard):
         from risk_guard import effective_buy_price
+
         assert effective_buy_price(100.0, "market", None) == 100.0
         assert effective_buy_price(100.0, "market", 500.0) == 100.0  # market には limit_price が無関係
 
     def test_limit_above_current_price_uses_limit_price(self, guard):
         from risk_guard import effective_buy_price
+
         assert effective_buy_price(100.0, "limit", 500.0) == 500.0
 
     def test_limit_below_current_price_uses_current_price(self, guard):
         from risk_guard import effective_buy_price
+
         assert effective_buy_price(100.0, "limit", 90.0) == 100.0
 
     def test_limit_order_far_above_current_price_is_capped_by_the_high_price(self, guard):
@@ -342,9 +399,13 @@ class TestEffectiveBuyPrice:
         最悪 $500 で約定しても総ポジション上限(50%)・単一トレード上限(25%)を
         超えない株数まで自動的に縮む。"""
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 90,
-            "order_type": "limit", "limit_price": 500.0,
-            "position_size_pct": 25, "quantity": 100,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 90,
+            "order_type": "limit",
+            "limit_price": 500.0,
+            "position_size_pct": 25,
+            "quantity": 100,
         }
         portfolio = {"daily_pnl": 0, "positions": []}
         result = guard.check(decision, portfolio, price=100.0, equity=10000.0)
@@ -361,9 +422,13 @@ class TestEffectiveBuyPrice:
         """total position ratio (Stage 7) も実効価格を使う。price のままでは
         見逃してしまう超過を、指値の実効価格を使うことで検出できることを確認する。"""
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 90,
-            "order_type": "limit", "limit_price": 500.0,
-            "position_size_pct": 25, "quantity": 25,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 90,
+            "order_type": "limit",
+            "limit_price": 500.0,
+            "position_size_pct": 25,
+            "quantity": 25,
         }
         portfolio = {"daily_pnl": 0, "positions": large_position}
         # large_position の時価が $40,000 (40% of equity)。実効価格 ($500) で

@@ -1,4 +1,5 @@
 """Skip Logic unit tests"""
+
 from skip_logic import should_skip_opus
 
 

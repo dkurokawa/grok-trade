@@ -13,6 +13,7 @@ Schedule: Avoid market open rush hours
 - Avoid: 14:00-15:00 UTC (30 min before/after open)
 - Best times: 16:00-20:00 UTC (mid-session) or 00:00-13:00 UTC (pre-market)
 """
+
 import os
 from datetime import UTC, datetime
 
@@ -27,7 +28,7 @@ AUTH_HEADERS = {"x-api-key": PRODUCTION_API_SHARED_SECRET}
 # Skip all tests if no production URL/secret configured
 pytestmark = pytest.mark.skipif(
     not PRODUCTION_URL or not PRODUCTION_API_SHARED_SECRET,
-    reason="PRODUCTION_API_URL / PRODUCTION_API_SHARED_SECRET not set"
+    reason="PRODUCTION_API_URL / PRODUCTION_API_SHARED_SECRET not set",
 )
 
 
@@ -64,6 +65,7 @@ class TestProductionHealth:
     def test_health_response_time(self, client):
         """Test /health responds within acceptable time"""
         import time
+
         start = time.time()
         response = client.get(f"{PRODUCTION_URL}/health", headers=AUTH_HEADERS)
         elapsed = time.time() - start
@@ -159,10 +161,7 @@ class TestProductionAvoidRushHour:
     def client(self):
         return httpx.Client(timeout=30.0)
 
-    @pytest.mark.skipif(
-        is_market_open_rush_hour(),
-        reason="Skipping during market open rush hour (14:00-15:00 UTC)"
-    )
+    @pytest.mark.skipif(is_market_open_rush_hour(), reason="Skipping during market open rush hour (14:00-15:00 UTC)")
     def test_full_status_during_off_peak(self, client):
         """Full status check during off-peak hours"""
         response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
@@ -356,6 +355,7 @@ class TestProductionPerformance:
     def test_health_response_time_under_1s(self, client):
         """Test health endpoint responds under 1 second"""
         import time
+
         start = time.time()
         response = client.get(f"{PRODUCTION_URL}/health", headers=AUTH_HEADERS)
         elapsed = time.time() - start
@@ -366,6 +366,7 @@ class TestProductionPerformance:
     def test_status_response_time_under_5s(self, client):
         """Test status endpoint responds under 5 seconds"""
         import time
+
         start = time.time()
         response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         elapsed = time.time() - start
@@ -376,6 +377,7 @@ class TestProductionPerformance:
     def test_trades_response_time_under_5s(self, client):
         """Test trades endpoint responds under 5 seconds"""
         import time
+
         start = time.time()
         response = client.get(f"{PRODUCTION_URL}/trades?limit=50", headers=AUTH_HEADERS)
         elapsed = time.time() - start

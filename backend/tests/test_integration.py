@@ -1,4 +1,5 @@
 """Integration tests - Component interaction and data flow for 4-stage pipeline"""
+
 import os
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -32,12 +33,17 @@ def _grok_report(significant=True, sentiment=55):
 
 def _opus_decision(action="buy", symbol="MSTR", quantity=10, confidence=80):
     return {
-        "action": action, "symbol": symbol, "quantity": quantity,
-        "order_type": "market", "limit_price": None,
+        "action": action,
+        "symbol": symbol,
+        "quantity": quantity,
+        "order_type": "market",
+        "limit_price": None,
         "stop_loss": 330.0 if action == "buy" else None,
         "take_profit": 400.0 if action == "buy" else None,
-        "position_size_pct": 30, "reasoning": "Test",
-        "risk_assessment": "medium", "confidence": confidence,
+        "position_size_pct": 30,
+        "reasoning": "Test",
+        "risk_assessment": "medium",
+        "confidence": confidence,
         "adjustments": [],
     }
 
@@ -49,33 +55,48 @@ class TestRiskGuardTraderIntegration:
     def risk_guard(self):
         with patch.dict(os.environ, {"MAX_DAILY_LOSS": "500", "MAX_POSITION_RATIO": "0.5"}):
             from risk_guard import RiskGuard
+
             return RiskGuard()
 
     @pytest.fixture
     def mock_trader_data(self):
         return {
             "account": {
-                "cash": 100000.0, "portfolio_value": 100000.0,
-                "buying_power": 200000.0, "equity": 100000.0, "daily_pnl": -200.0,
+                "cash": 100000.0,
+                "portfolio_value": 100000.0,
+                "buying_power": 200000.0,
+                "equity": 100000.0,
+                "daily_pnl": -200.0,
             },
             "positions": [
-                {"symbol": "MSTR", "qty": 10.0, "avg_entry_price": 340.0,
-                 "market_value": 3500.0, "unrealized_pl": 100.0}
+                {
+                    "symbol": "MSTR",
+                    "qty": 10.0,
+                    "avg_entry_price": 340.0,
+                    "market_value": 3500.0,
+                    "unrealized_pl": 100.0,
+                }
             ],
         }
 
     def test_risk_check_with_real_trader_data(self, risk_guard, mock_trader_data):
         """Test risk check with realistic trader data"""
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 300,
-            "position_size_pct": 10, "quantity": 10,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 300,
+            "position_size_pct": 10,
+            "quantity": 10,
         }
         portfolio = {
             "daily_pnl": mock_trader_data["account"]["daily_pnl"],
             "positions": mock_trader_data["positions"],
         }
         result = risk_guard.check(
-            decision, portfolio, price=350.0, equity=mock_trader_data["account"]["equity"],
+            decision,
+            portfolio,
+            price=350.0,
+            equity=mock_trader_data["account"]["equity"],
         )
         assert result.allowed is True
 
@@ -83,15 +104,21 @@ class TestRiskGuardTraderIntegration:
         """Individual trades are capped at max_single_trade_pct, so an
         oversized quantity is shrunk rather than outright blocked."""
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 300,
-            "position_size_pct": 50, "quantity": 200,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 300,
+            "position_size_pct": 50,
+            "quantity": 200,
         }
         portfolio = {
             "daily_pnl": mock_trader_data["account"]["daily_pnl"],
             "positions": mock_trader_data["positions"],
         }
         result = risk_guard.check(
-            decision, portfolio, price=350.0, equity=mock_trader_data["account"]["equity"],
+            decision,
+            portfolio,
+            price=350.0,
+            equity=mock_trader_data["account"]["equity"],
         )
         assert result.allowed is True
         assert decision["quantity"] < 200
@@ -101,15 +128,21 @@ class TestRiskGuardTraderIntegration:
         """Test risk guard blocks trading after significant loss"""
         mock_trader_data["account"]["daily_pnl"] = -600.0
         decision = {
-            "action": "buy", "confidence": 80, "stop_loss": 300,
-            "position_size_pct": 10, "quantity": 1,
+            "action": "buy",
+            "confidence": 80,
+            "stop_loss": 300,
+            "position_size_pct": 10,
+            "quantity": 1,
         }
         portfolio = {
             "daily_pnl": mock_trader_data["account"]["daily_pnl"],
             "positions": mock_trader_data["positions"],
         }
         result = risk_guard.check(
-            decision, portfolio, price=350.0, equity=mock_trader_data["account"]["equity"],
+            decision,
+            portfolio,
+            price=350.0,
+            equity=mock_trader_data["account"]["equity"],
         )
         assert result.allowed is False
         assert result.reason == "daily_loss_limit_reached"
@@ -120,11 +153,16 @@ class TestRiskGuardOpusIntegration:
 
     @pytest.fixture
     def risk_guard(self):
-        with patch.dict(os.environ, {
-            "MAX_DAILY_LOSS": "500", "MAX_POSITION_RATIO": "0.5",
-            "MIN_CONFIDENCE": "40",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "MAX_DAILY_LOSS": "500",
+                "MAX_POSITION_RATIO": "0.5",
+                "MIN_CONFIDENCE": "40",
+            },
+        ):
             from risk_guard import RiskGuard
+
             return RiskGuard()
 
     def test_opus_buy_with_stop_loss_passes(self, risk_guard):
@@ -163,6 +201,7 @@ class TestDatabaseIntegration:
     @pytest.fixture
     def dyn(self):
         import db.dynamo as d
+
         return d
 
     def test_trade_and_pipeline_consistency(self, dyn):
@@ -178,9 +217,16 @@ class TestDatabaseIntegration:
             alpaca_order_id="order-123",
         )
         dyn.log_trade(
-            cycle_id="cycle-123", symbol="MSTR", action="buy", quantity=10.0,
-            price=350.0, order_type="market", status="filled",
-            alpaca_order_id="order-123", stop_loss=330.0, take_profit=400.0,
+            cycle_id="cycle-123",
+            symbol="MSTR",
+            action="buy",
+            quantity=10.0,
+            price=350.0,
+            order_type="market",
+            status="filled",
+            alpaca_order_id="order-123",
+            stop_loss=330.0,
+            take_profit=400.0,
         )
 
         logged = dyn.get_pipeline_logs(1)[0]
@@ -229,9 +275,16 @@ class TestDatabaseIntegration:
 
     def test_trade_with_stop_loss_take_profit(self, dyn):
         dyn.log_trade(
-            cycle_id="cycle-123", symbol="MSTR", action="buy", quantity=10.0,
-            price=350.0, order_type="market", status="filled",
-            alpaca_order_id="order-sl", stop_loss=330.0, take_profit=400.0,
+            cycle_id="cycle-123",
+            symbol="MSTR",
+            action="buy",
+            quantity=10.0,
+            price=350.0,
+            order_type="market",
+            status="filled",
+            alpaca_order_id="order-sl",
+            stop_loss=330.0,
+            take_profit=400.0,
         )
 
         saved = dyn.get_trades(1)[0]
@@ -260,12 +313,13 @@ class TestAPIIntegration:
 
         mock_trader = MagicMock()
         mock_trader.get_account.return_value = {
-            "cash": 100000.0, "portfolio_value": 100000.0,
-            "buying_power": 200000.0, "equity": 100000.0, "daily_pnl": 500.0,
+            "cash": 100000.0,
+            "portfolio_value": 100000.0,
+            "buying_power": 200000.0,
+            "equity": 100000.0,
+            "daily_pnl": 500.0,
         }
-        mock_trader.get_positions.return_value = [
-            {"symbol": "MSTR", "qty": 10.0, "market_value": 3500.0}
-        ]
+        mock_trader.get_positions.return_value = [{"symbol": "MSTR", "qty": 10.0, "market_value": 3500.0}]
         mock_notifier = MagicMock()
         mock_notifier.notify_system_stop = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
@@ -288,6 +342,7 @@ class TestAPIIntegration:
 
     def test_stop_start_cycle(self, client):
         import db.dynamo as dyn
+
         headers = {"x-api-key": self.SECRET}
 
         stop_response = client.post("/stop", headers=headers)
@@ -306,6 +361,7 @@ class TestAPIIntegration:
 
     def test_pipeline_endpoint_returns_logs(self, client):
         import db.dynamo as dyn
+
         dyn.log_pipeline(cycle_id="c1", decision_engine="opus", grok_latency_ms=90)
 
         response = client.get("/pipeline", headers={"x-api-key": self.SECRET})
@@ -332,14 +388,18 @@ class TestNotificationIntegration:
         """Test Grok stage sends Discord pipeline log"""
         mock_trader = MagicMock()
         mock_trader.get_account.return_value = {
-            "cash": 100000.0, "portfolio_value": 100000.0,
-            "buying_power": 200000.0, "equity": 100000.0,
-            "last_equity": 100000.0, "daily_pnl": 0.0,
+            "cash": 100000.0,
+            "portfolio_value": 100000.0,
+            "buying_power": 200000.0,
+            "equity": 100000.0,
+            "last_equity": 100000.0,
+            "daily_pnl": 0.0,
         }
         mock_trader.get_positions.return_value = []
         mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
         mock_trader.execute_order.return_value = {
-            "order_id": "order-123", "status": "filled",
+            "order_id": "order-123",
+            "status": "filled",
         }
 
         mock_grok = MagicMock()
@@ -348,18 +408,21 @@ class TestNotificationIntegration:
         mock_opus = MagicMock()
         mock_opus.analyze.return_value = (_opus_decision(), 800)
 
-        with patch("trading_core.trader", mock_trader), \
-             patch("trading_core.grok", mock_grok), \
-             patch("trading_core.opus", mock_opus), \
-             patch("trading_core.notifier", mock_notifier), \
-             patch("trading_core.guard") as mock_guard, \
-             patch("trading_core.log_pipeline"), \
-             patch("trading_core.log_trade"):
+        with (
+            patch("trading_core.trader", mock_trader),
+            patch("trading_core.grok", mock_grok),
+            patch("trading_core.opus", mock_opus),
+            patch("trading_core.notifier", mock_notifier),
+            patch("trading_core.guard") as mock_guard,
+            patch("trading_core.log_pipeline"),
+            patch("trading_core.log_trade"),
+        ):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
             from trading_core import trading_cycle
+
             await trading_cycle()
 
         # Verify pipeline logs sent for grok, opus, execution
@@ -373,21 +436,25 @@ class TestNotificationIntegration:
         """Test system stop sends notification"""
         mock_trader = MagicMock()
         mock_trader.get_account.return_value = {
-            "cash": 100000.0, "portfolio_value": 100000.0,
-            "buying_power": 200000.0, "equity": 100000.0,
-            "last_equity": 100000.0, "daily_pnl": -600.0,
+            "cash": 100000.0,
+            "portfolio_value": 100000.0,
+            "buying_power": 200000.0,
+            "equity": 100000.0,
+            "last_equity": 100000.0,
+            "daily_pnl": -600.0,
         }
         mock_trader.get_positions.return_value = []
 
-        with patch("trading_core.trader", mock_trader), \
-             patch("trading_core.notifier", mock_notifier), \
-             patch("trading_core.guard") as mock_guard, \
-             patch("trading_core.set_scheduler_state"):
-            mock_guard.check_system_health.return_value = MagicMock(
-                allowed=False, reason="Daily loss limit"
-            )
+        with (
+            patch("trading_core.trader", mock_trader),
+            patch("trading_core.notifier", mock_notifier),
+            patch("trading_core.guard") as mock_guard,
+            patch("trading_core.set_scheduler_state"),
+        ):
+            mock_guard.check_system_health.return_value = MagicMock(allowed=False, reason="Daily loss limit")
 
             from trading_core import trading_cycle
+
             await trading_cycle()
 
         mock_notifier.notify_system_stop.assert_called_once()
@@ -401,16 +468,20 @@ class TestPipelineDataFlow:
         """Test Grok output is correctly passed to Opus"""
         mock_trader = MagicMock()
         mock_trader.get_account.return_value = {
-            "cash": 100000.0, "portfolio_value": 100000.0,
-            "buying_power": 200000.0, "equity": 100000.0,
-            "last_equity": 100000.0, "daily_pnl": 0.0,
+            "cash": 100000.0,
+            "portfolio_value": 100000.0,
+            "buying_power": 200000.0,
+            "equity": 100000.0,
+            "last_equity": 100000.0,
+            "daily_pnl": 0.0,
         }
         mock_trader.get_positions.return_value = []
         mock_trader.get_market_data.return_value = {
             "MSTR": {"price": 350.0, "change_5d": "+5%", "volume": 1000000},
         }
         mock_trader.execute_order.return_value = {
-            "order_id": "o1", "status": "filled",
+            "order_id": "o1",
+            "status": "filled",
         }
 
         grok_report = _grok_report()
@@ -424,18 +495,21 @@ class TestPipelineDataFlow:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("trading_core.trader", mock_trader), \
-             patch("trading_core.grok", mock_grok), \
-             patch("trading_core.opus", mock_opus), \
-             patch("trading_core.notifier", mock_notifier), \
-             patch("trading_core.guard") as mock_guard, \
-             patch("trading_core.log_pipeline"), \
-             patch("trading_core.log_trade"):
+        with (
+            patch("trading_core.trader", mock_trader),
+            patch("trading_core.grok", mock_grok),
+            patch("trading_core.opus", mock_opus),
+            patch("trading_core.notifier", mock_notifier),
+            patch("trading_core.guard") as mock_guard,
+            patch("trading_core.log_pipeline"),
+            patch("trading_core.log_trade"),
+        ):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
             from trading_core import trading_cycle
+
             await trading_cycle()
 
         # Verify Opus received the grok_report
@@ -449,14 +523,18 @@ class TestPipelineDataFlow:
         """Test Opus decision is correctly validated by Risk Guard"""
         mock_trader = MagicMock()
         mock_trader.get_account.return_value = {
-            "cash": 100000.0, "portfolio_value": 100000.0,
-            "buying_power": 200000.0, "equity": 100000.0,
-            "last_equity": 100000.0, "daily_pnl": 0.0,
+            "cash": 100000.0,
+            "portfolio_value": 100000.0,
+            "buying_power": 200000.0,
+            "equity": 100000.0,
+            "last_equity": 100000.0,
+            "daily_pnl": 0.0,
         }
         mock_trader.get_positions.return_value = []
         mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
         mock_trader.execute_order.return_value = {
-            "order_id": "o1", "status": "filled",
+            "order_id": "o1",
+            "status": "filled",
         }
 
         mock_grok = MagicMock()
@@ -470,18 +548,21 @@ class TestPipelineDataFlow:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("trading_core.trader", mock_trader), \
-             patch("trading_core.grok", mock_grok), \
-             patch("trading_core.opus", mock_opus), \
-             patch("trading_core.notifier", mock_notifier), \
-             patch("trading_core.guard") as mock_guard, \
-             patch("trading_core.log_pipeline"), \
-             patch("trading_core.log_trade"):
+        with (
+            patch("trading_core.trader", mock_trader),
+            patch("trading_core.grok", mock_grok),
+            patch("trading_core.opus", mock_opus),
+            patch("trading_core.notifier", mock_notifier),
+            patch("trading_core.guard") as mock_guard,
+            patch("trading_core.log_pipeline"),
+            patch("trading_core.log_trade"),
+        ):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
             from trading_core import trading_cycle
+
             await trading_cycle()
 
         # Verify guard.check() received Opus's decision (it passes through
@@ -508,9 +589,9 @@ class TestErrorHandlingIntegration:
         mock_notifier = MagicMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("trading_core.trader", mock_trader), \
-             patch("trading_core.notifier", mock_notifier):
+        with patch("trading_core.trader", mock_trader), patch("trading_core.notifier", mock_notifier):
             from trading_core import trading_cycle
+
             with pytest.raises(Exception, match="API connection failed"):
                 await trading_cycle()
 
@@ -521,9 +602,12 @@ class TestErrorHandlingIntegration:
         """Same as above, for a Grok API failure."""
         mock_trader = MagicMock()
         mock_trader.get_account.return_value = {
-            "cash": 100000.0, "portfolio_value": 100000.0,
-            "buying_power": 200000.0, "equity": 100000.0,
-            "last_equity": 100000.0, "daily_pnl": 0.0,
+            "cash": 100000.0,
+            "portfolio_value": 100000.0,
+            "buying_power": 200000.0,
+            "equity": 100000.0,
+            "last_equity": 100000.0,
+            "daily_pnl": 0.0,
         }
         mock_trader.get_positions.return_value = []
         mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
@@ -534,12 +618,15 @@ class TestErrorHandlingIntegration:
         mock_notifier = MagicMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("trading_core.trader", mock_trader), \
-             patch("trading_core.grok", mock_grok), \
-             patch("trading_core.notifier", mock_notifier), \
-             patch("trading_core.guard") as mock_guard:
+        with (
+            patch("trading_core.trader", mock_trader),
+            patch("trading_core.grok", mock_grok),
+            patch("trading_core.notifier", mock_notifier),
+            patch("trading_core.guard") as mock_guard,
+        ):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             from trading_core import trading_cycle
+
             with pytest.raises(Exception, match="Grok API error"):
                 await trading_cycle()
 
@@ -550,14 +637,18 @@ class TestErrorHandlingIntegration:
         """Test notification failure doesn't prevent trade execution"""
         mock_trader = MagicMock()
         mock_trader.get_account.return_value = {
-            "cash": 100000.0, "portfolio_value": 100000.0,
-            "buying_power": 200000.0, "equity": 100000.0,
-            "last_equity": 100000.0, "daily_pnl": 0.0,
+            "cash": 100000.0,
+            "portfolio_value": 100000.0,
+            "buying_power": 200000.0,
+            "equity": 100000.0,
+            "last_equity": 100000.0,
+            "daily_pnl": 0.0,
         }
         mock_trader.get_positions.return_value = []
         mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
         mock_trader.execute_order.return_value = {
-            "order_id": "order-123", "status": "filled",
+            "order_id": "order-123",
+            "status": "filled",
         }
 
         mock_grok = MagicMock()
@@ -570,18 +661,21 @@ class TestErrorHandlingIntegration:
         mock_notifier.send_pipeline_log = AsyncMock(side_effect=Exception("Discord error"))
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch("trading_core.trader", mock_trader), \
-             patch("trading_core.grok", mock_grok), \
-             patch("trading_core.opus", mock_opus), \
-             patch("trading_core.notifier", mock_notifier), \
-             patch("trading_core.guard") as mock_guard, \
-             patch("trading_core.log_pipeline"), \
-             patch("trading_core.log_trade"):
+        with (
+            patch("trading_core.trader", mock_trader),
+            patch("trading_core.grok", mock_grok),
+            patch("trading_core.opus", mock_opus),
+            patch("trading_core.notifier", mock_notifier),
+            patch("trading_core.guard") as mock_guard,
+            patch("trading_core.log_pipeline"),
+            patch("trading_core.log_trade"),
+        ):
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
 
             from trading_core import trading_cycle
+
             await trading_cycle()
 
         mock_trader.execute_order.assert_called_once()

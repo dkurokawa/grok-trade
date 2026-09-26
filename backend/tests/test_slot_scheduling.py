@@ -7,6 +7,7 @@ whenever the Lambda actually started, so a cold-start/queueing delay that
 straddles a slot boundary can't split one scheduled firing into two slots
 (and two different client_order_ids).
 """
+
 from datetime import datetime
 
 from trading_core import NY_TZ, _resolve_now, _slot_id

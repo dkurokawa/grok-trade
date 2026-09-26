@@ -1,4 +1,5 @@
 """decision_schema.validate_decision - each violation must force hold, never raise."""
+
 from decision_schema import validate_decision
 
 WATCHLIST = ["MSTR", "TSLA", "QQQ", "SPY"]
@@ -6,11 +7,18 @@ WATCHLIST = ["MSTR", "TSLA", "QQQ", "SPY"]
 
 def _buy(**overrides):
     decision = {
-        "action": "buy", "symbol": "MSTR", "quantity": 10,
-        "order_type": "market", "limit_price": None,
-        "stop_loss": 330.0, "take_profit": 400.0,
-        "position_size_pct": 20, "confidence": 80,
-        "reasoning": "test", "risk_assessment": "medium", "adjustments": [],
+        "action": "buy",
+        "symbol": "MSTR",
+        "quantity": 10,
+        "order_type": "market",
+        "limit_price": None,
+        "stop_loss": 330.0,
+        "take_profit": 400.0,
+        "position_size_pct": 20,
+        "confidence": 80,
+        "reasoning": "test",
+        "risk_assessment": "medium",
+        "adjustments": [],
     }
     decision.update(overrides)
     return decision
@@ -18,11 +26,18 @@ def _buy(**overrides):
 
 def _sell(**overrides):
     decision = {
-        "action": "sell", "symbol": "MSTR", "quantity": 5,
-        "order_type": "market", "limit_price": None,
-        "stop_loss": None, "take_profit": None,
-        "position_size_pct": 0, "confidence": 80,
-        "reasoning": "test", "risk_assessment": "medium", "adjustments": [],
+        "action": "sell",
+        "symbol": "MSTR",
+        "quantity": 5,
+        "order_type": "market",
+        "limit_price": None,
+        "stop_loss": None,
+        "take_profit": None,
+        "position_size_pct": 0,
+        "confidence": 80,
+        "reasoning": "test",
+        "risk_assessment": "medium",
+        "adjustments": [],
     }
     decision.update(overrides)
     return decision
@@ -62,22 +77,16 @@ class TestActionAndOrderType:
         assert reason is not None
 
     def test_limit_without_limit_price_forces_hold(self):
-        decision, reason = validate_decision(
-            _buy(order_type="limit", limit_price=None), WATCHLIST, [], 350.0
-        )
+        decision, reason = validate_decision(_buy(order_type="limit", limit_price=None), WATCHLIST, [], 350.0)
         assert decision["action"] == "hold"
         assert "limit_price" in reason
 
     def test_limit_with_zero_limit_price_forces_hold(self):
-        decision, reason = validate_decision(
-            _buy(order_type="limit", limit_price=0), WATCHLIST, [], 350.0
-        )
+        decision, reason = validate_decision(_buy(order_type="limit", limit_price=0), WATCHLIST, [], 350.0)
         assert decision["action"] == "hold"
 
     def test_limit_with_positive_limit_price_passes(self):
-        decision, reason = validate_decision(
-            _buy(order_type="limit", limit_price=345.0), WATCHLIST, [], 350.0
-        )
+        decision, reason = validate_decision(_buy(order_type="limit", limit_price=345.0), WATCHLIST, [], 350.0)
         assert reason is None
         assert decision["action"] == "buy"
 
@@ -157,8 +166,10 @@ class TestBuyLimitPriceBand:
 
     def test_sell_is_not_subject_to_the_band(self):
         decision, reason = validate_decision(
-            _sell(order_type="limit", limit_price=500.0), WATCHLIST,
-            [{"symbol": "MSTR", "qty": 10}], current_price=100.0,
+            _sell(order_type="limit", limit_price=500.0),
+            WATCHLIST,
+            [{"symbol": "MSTR", "qty": 10}],
+            current_price=100.0,
         )
         assert reason is None
         assert decision["action"] == "sell"
@@ -175,7 +186,9 @@ class TestStopLossReferencePrice:
         なる。"""
         decision, reason = validate_decision(
             _buy(order_type="limit", limit_price=90.0, stop_loss=95.0, take_profit=None),
-            WATCHLIST, [], current_price=100.0,
+            WATCHLIST,
+            [],
+            current_price=100.0,
         )
         assert decision["action"] == "hold"
         assert "reference price" in reason
@@ -183,7 +196,9 @@ class TestStopLossReferencePrice:
     def test_stop_loss_below_limit_price_passes(self):
         decision, reason = validate_decision(
             _buy(order_type="limit", limit_price=90.0, stop_loss=85.0, take_profit=None),
-            WATCHLIST, [], current_price=100.0,
+            WATCHLIST,
+            [],
+            current_price=100.0,
         )
         assert reason is None
         assert decision["action"] == "buy"
@@ -192,7 +207,9 @@ class TestStopLossReferencePrice:
         """指値 90 に対して利確 92 は妥当だが、利確 88（指値より低い）は矛盾。"""
         decision, reason = validate_decision(
             _buy(order_type="limit", limit_price=90.0, stop_loss=85.0, take_profit=88.0),
-            WATCHLIST, [], current_price=100.0,
+            WATCHLIST,
+            [],
+            current_price=100.0,
         )
         assert decision["action"] == "hold"
         assert "reference price" in reason
@@ -200,7 +217,9 @@ class TestStopLossReferencePrice:
     def test_take_profit_above_limit_price_passes(self):
         decision, reason = validate_decision(
             _buy(order_type="limit", limit_price=90.0, stop_loss=85.0, take_profit=92.0),
-            WATCHLIST, [], current_price=100.0,
+            WATCHLIST,
+            [],
+            current_price=100.0,
         )
         assert reason is None
         assert decision["action"] == "buy"
@@ -209,7 +228,9 @@ class TestStopLossReferencePrice:
         """成行なら基準は現在値のまま（E8 は指値のときだけ変える）。"""
         decision, reason = validate_decision(
             _buy(order_type="market", limit_price=None, stop_loss=95.0, take_profit=None),
-            WATCHLIST, [], current_price=100.0,
+            WATCHLIST,
+            [],
+            current_price=100.0,
         )
         assert reason is None
         assert decision["action"] == "buy"
@@ -249,16 +270,12 @@ class TestQuantityRules:
         assert decision["action"] == "hold"
 
     def test_sell_quantity_exceeding_holdings_forces_hold(self):
-        decision, reason = validate_decision(
-            _sell(quantity=999), WATCHLIST, HELD_MSTR, current_price=350.0
-        )
+        decision, reason = validate_decision(_sell(quantity=999), WATCHLIST, HELD_MSTR, current_price=350.0)
         assert decision["action"] == "hold"
         assert "exceeds held" in reason
 
     def test_sell_quantity_equal_to_holdings_passes(self):
-        decision, reason = validate_decision(
-            _sell(quantity=10), WATCHLIST, HELD_MSTR, current_price=350.0
-        )
+        decision, reason = validate_decision(_sell(quantity=10), WATCHLIST, HELD_MSTR, current_price=350.0)
         assert reason is None
         assert decision["action"] == "sell"
 

@@ -1,4 +1,5 @@
 """Grok Client unit tests - updated for market report collection (no trading decisions)"""
+
 import json
 import os
 from unittest.mock import MagicMock, patch
@@ -13,10 +14,7 @@ class TestGrokClientInit:
         with patch.dict(os.environ, {"GROK_API_KEY": "test_key"}):
             with patch("grok_client.OpenAI") as mock_openai:
                 GrokClient()
-                mock_openai.assert_called_once_with(
-                    api_key="test_key",
-                    base_url="https://api.x.ai/v1"
-                )
+                mock_openai.assert_called_once_with(api_key="test_key", base_url="https://api.x.ai/v1")
 
     def test_default_model(self):
         with patch.dict(os.environ, {"GROK_API_KEY": "test_key"}, clear=False):
@@ -64,11 +62,13 @@ class TestBuildPrompt:
         rather than silently omit the comparison Grok is asked to make."""
         prompt = client._build_prompt(market_data={}, positions=[])
         from grok_client import NO_PREVIOUS_SENTIMENT
+
         assert NO_PREVIOUS_SENTIMENT in prompt
 
     def test_prompt_includes_previous_sentiment_when_given(self, client):
         prompt = client._build_prompt(
-            market_data={}, positions=[],
+            market_data={},
+            positions=[],
             previous_sentiment="時刻: 2026-01-01T10:00:00 / センチメント: 42 / 重要な変化と判定されたか: False",
         )
         assert "センチメント: 42" in prompt
@@ -76,6 +76,7 @@ class TestBuildPrompt:
     def test_prompt_prohibits_recommendations(self, client):
         """system promptに売買推奨禁止が含まれていることを確認"""
         from grok_client import GROK_SYSTEM
+
         assert "売買の推奨は絶対にしないでください" in GROK_SYSTEM
 
 
@@ -87,21 +88,23 @@ class TestParseResponse:
                 return GrokClient()
 
     def test_parse_valid_market_report(self, client):
-        raw = json.dumps({
-            "timestamp": "2026-02-06 10:00 EST",
-            "significant_change": True,
-            "sentiment": {
-                "overall": 45,
-                "trending_tickers": [{"symbol": "NVDA", "reason": "earnings"}],
-                "notable_signals": ["tech rally"],
-            },
-            "breaking_news": ["Fed holds rates steady"],
-            "market_context": {
-                "spy_trend": "bullish",
-                "vix_level": "low",
-                "sector_rotation": "tech",
-            },
-        })
+        raw = json.dumps(
+            {
+                "timestamp": "2026-02-06 10:00 EST",
+                "significant_change": True,
+                "sentiment": {
+                    "overall": 45,
+                    "trending_tickers": [{"symbol": "NVDA", "reason": "earnings"}],
+                    "notable_signals": ["tech rally"],
+                },
+                "breaking_news": ["Fed holds rates steady"],
+                "market_context": {
+                    "spy_trend": "bullish",
+                    "vix_level": "low",
+                    "sector_rotation": "tech",
+                },
+            }
+        )
         result = client._parse_response(raw)
         assert result is not None
         assert result["significant_change"] is True
@@ -109,12 +112,14 @@ class TestParseResponse:
         assert len(result["breaking_news"]) == 1
 
     def test_parse_with_markdown_block(self, client):
-        inner = json.dumps({
-            "significant_change": False,
-            "sentiment": {"overall": 0, "trending_tickers": [], "notable_signals": []},
-            "breaking_news": [],
-            "market_context": {"spy_trend": "neutral", "vix_level": "moderate", "sector_rotation": "none"},
-        })
+        inner = json.dumps(
+            {
+                "significant_change": False,
+                "sentiment": {"overall": 0, "trending_tickers": [], "notable_signals": []},
+                "breaking_news": [],
+                "market_context": {"spy_trend": "neutral", "vix_level": "moderate", "sector_rotation": "none"},
+            }
+        )
         raw = f"```json\n{inner}\n```"
         result = client._parse_response(raw)
         assert result is not None
@@ -129,11 +134,13 @@ class TestParseResponse:
         assert result["breaking_news"] == []
 
     def test_parse_normalizes_sentiment_to_int(self, client):
-        raw = json.dumps({
-            "significant_change": True,
-            "sentiment": {"overall": 45.7, "trending_tickers": [], "notable_signals": []},
-            "breaking_news": [],
-        })
+        raw = json.dumps(
+            {
+                "significant_change": True,
+                "sentiment": {"overall": 45.7, "trending_tickers": [], "notable_signals": []},
+                "breaking_news": [],
+            }
+        )
         result = client._parse_response(raw)
         assert isinstance(result["sentiment"]["overall"], int)
         assert result["sentiment"]["overall"] == 45
@@ -147,11 +154,13 @@ class TestParseResponse:
         assert result is None
 
     def test_parse_unicode(self, client):
-        raw = json.dumps({
-            "significant_change": True,
-            "sentiment": {"overall": 30, "trending_tickers": [], "notable_signals": ["日銀利上げ観測"]},
-            "breaking_news": ["日銀金融政策決定"],
-        })
+        raw = json.dumps(
+            {
+                "significant_change": True,
+                "sentiment": {"overall": 30, "trending_tickers": [], "notable_signals": ["日銀利上げ観測"]},
+                "breaking_news": ["日銀金融政策決定"],
+            }
+        )
         result = client._parse_response(raw)
         assert result is not None
         assert "日銀" in result["breaking_news"][0]
@@ -167,16 +176,19 @@ class TestCollectMarketReport:
     def test_collect_success(self, client, mock_market_data):
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps({
-            "significant_change": True,
-            "sentiment": {"overall": 50, "trending_tickers": [], "notable_signals": []},
-            "breaking_news": ["Big news"],
-            "market_context": {"spy_trend": "bullish", "vix_level": "low", "sector_rotation": "tech"},
-        })
+        mock_response.choices[0].message.content = json.dumps(
+            {
+                "significant_change": True,
+                "sentiment": {"overall": 50, "trending_tickers": [], "notable_signals": []},
+                "breaking_news": ["Big news"],
+                "market_context": {"spy_trend": "bullish", "vix_level": "low", "sector_rotation": "tech"},
+            }
+        )
         client.client.chat.completions.create = MagicMock(return_value=mock_response)
 
         report, latency = client.collect_market_report(
-            market_data=mock_market_data, positions=[],
+            market_data=mock_market_data,
+            positions=[],
         )
         assert report is not None
         assert report["significant_change"] is True
@@ -185,15 +197,18 @@ class TestCollectMarketReport:
     def test_collect_forwards_previous_sentiment_to_the_prompt(self, client, mock_market_data):
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps({
-            "significant_change": False,
-            "sentiment": {"overall": 0, "trending_tickers": [], "notable_signals": []},
-            "breaking_news": [],
-        })
+        mock_response.choices[0].message.content = json.dumps(
+            {
+                "significant_change": False,
+                "sentiment": {"overall": 0, "trending_tickers": [], "notable_signals": []},
+                "breaking_news": [],
+            }
+        )
         client.client.chat.completions.create = MagicMock(return_value=mock_response)
 
         client.collect_market_report(
-            market_data=mock_market_data, positions=[],
+            market_data=mock_market_data,
+            positions=[],
             previous_sentiment="センチメント: 77",
         )
 
@@ -203,7 +218,8 @@ class TestCollectMarketReport:
     def test_collect_api_error(self, client, mock_market_data):
         client.client.chat.completions.create = MagicMock(side_effect=Exception("API Error"))
         report, latency = client.collect_market_report(
-            market_data=mock_market_data, positions=[],
+            market_data=mock_market_data,
+            positions=[],
         )
         assert report is None
         assert latency >= 0
@@ -211,15 +227,18 @@ class TestCollectMarketReport:
     def test_collect_returns_latency(self, client, mock_market_data):
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps({
-            "significant_change": False,
-            "sentiment": {"overall": 0, "trending_tickers": [], "notable_signals": []},
-            "breaking_news": [],
-        })
+        mock_response.choices[0].message.content = json.dumps(
+            {
+                "significant_change": False,
+                "sentiment": {"overall": 0, "trending_tickers": [], "notable_signals": []},
+                "breaking_news": [],
+            }
+        )
         client.client.chat.completions.create = MagicMock(return_value=mock_response)
 
         _, latency = client.collect_market_report(
-            market_data=mock_market_data, positions=[],
+            market_data=mock_market_data,
+            positions=[],
         )
         assert isinstance(latency, int)
 
@@ -230,7 +249,8 @@ class TestCollectMarketReport:
         client.client.chat.completions.create = MagicMock(return_value=mock_response)
 
         report, _ = client.collect_market_report(
-            market_data=mock_market_data, positions=[],
+            market_data=mock_market_data,
+            positions=[],
         )
         assert report is None
 
@@ -240,7 +260,8 @@ class TestCollectMarketReport:
         client.client.chat.completions.create = MagicMock(return_value=mock_response)
 
         report, _ = client.collect_market_report(
-            market_data=mock_market_data, positions=[],
+            market_data=mock_market_data,
+            positions=[],
         )
         assert report is None
 
@@ -260,22 +281,33 @@ class TestDecide:
         resp.choices[0].message.content = payload
         return resp
 
-    DECISION = json.dumps({
-        "action": "buy", "symbol": "MSTR", "quantity": 7,
-        "order_type": "market", "limit_price": None,
-        "stop_loss": 120.0, "take_profit": 150.0,
-        "position_size_pct": 30, "reasoning": "dip buy",
-        "risk_assessment": "medium", "confidence": 70, "adjustments": [],
-    })
+    DECISION = json.dumps(
+        {
+            "action": "buy",
+            "symbol": "MSTR",
+            "quantity": 7,
+            "order_type": "market",
+            "limit_price": None,
+            "stop_loss": 120.0,
+            "take_profit": 150.0,
+            "position_size_pct": 30,
+            "reasoning": "dip buy",
+            "risk_assessment": "medium",
+            "confidence": 70,
+            "adjustments": [],
+        }
+    )
 
     def test_returns_trade_decision(self, client, mock_market_data):
-        client.client.chat.completions.create = MagicMock(
-            return_value=self._response(self.DECISION)
-        )
+        client.client.chat.completions.create = MagicMock(return_value=self._response(self.DECISION))
 
         decision, latency = client.decide(
-            balance=1000.0, positions=[], daily_pnl=0.0, max_daily_loss=500.0,
-            price_data=mock_market_data, grok_report={"sentiment": {"overall": 60}},
+            balance=1000.0,
+            positions=[],
+            daily_pnl=0.0,
+            max_daily_loss=500.0,
+            price_data=mock_market_data,
+            grok_report={"sentiment": {"overall": 60}},
         )
 
         assert decision["action"] == "buy"
@@ -290,8 +322,12 @@ class TestDecide:
         client.client.chat.completions.create = create
 
         client.decide(
-            balance=1234.0, positions=[], daily_pnl=-10.0, max_daily_loss=500.0,
-            price_data=mock_market_data, grok_report={"sentiment": {"overall": 42}},
+            balance=1234.0,
+            positions=[],
+            daily_pnl=-10.0,
+            max_daily_loss=500.0,
+            price_data=mock_market_data,
+            grok_report={"sentiment": {"overall": 42}},
         )
 
         prompt = create.call_args[1]["messages"][1]["content"]
@@ -302,21 +338,27 @@ class TestDecide:
         client.client.chat.completions.create = MagicMock(side_effect=Exception("API down"))
 
         decision, latency = client.decide(
-            balance=1000.0, positions=[], daily_pnl=0.0, max_daily_loss=500.0,
-            price_data=mock_market_data, grok_report={},
+            balance=1000.0,
+            positions=[],
+            daily_pnl=0.0,
+            max_daily_loss=500.0,
+            price_data=mock_market_data,
+            grok_report={},
         )
 
         assert decision is None
         assert latency >= 0
 
     def test_unparseable_response_returns_none(self, client, mock_market_data):
-        client.client.chat.completions.create = MagicMock(
-            return_value=self._response("no json here")
-        )
+        client.client.chat.completions.create = MagicMock(return_value=self._response("no json here"))
 
         decision, _ = client.decide(
-            balance=1000.0, positions=[], daily_pnl=0.0, max_daily_loss=500.0,
-            price_data=mock_market_data, grok_report={},
+            balance=1000.0,
+            positions=[],
+            daily_pnl=0.0,
+            max_daily_loss=500.0,
+            price_data=mock_market_data,
+            grok_report={},
         )
 
         assert decision is None

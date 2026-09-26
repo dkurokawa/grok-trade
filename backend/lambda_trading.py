@@ -6,6 +6,7 @@ EventBridge Scheduler invokes this function with {"task": ...}:
 
 Secrets are loaded from SSM before Sentry or any API client is initialised.
 """
+
 import asyncio
 import os
 

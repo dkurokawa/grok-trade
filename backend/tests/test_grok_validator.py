@@ -1,4 +1,5 @@
 """Grok Validator unit tests"""
+
 from grok_validator import VALID_UNIVERSE, validate_grok_report
 
 

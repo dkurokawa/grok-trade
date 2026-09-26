@@ -1,4 +1,5 @@
 """Lambda entrypoint tests (EventBridge task dispatch + Mangum API adapter)."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -35,9 +36,7 @@ class TestTaskDispatch:
         import lambda_trading
 
         with patch.object(lambda_trading, "trading_cycle", new_callable=AsyncMock) as cycle:
-            lambda_trading.handler(
-                {"task": "trading_cycle", "scheduled_time": "2026-06-01T13:30:00Z"}, None
-            )
+            lambda_trading.handler({"task": "trading_cycle", "scheduled_time": "2026-06-01T13:30:00Z"}, None)
 
         cycle.assert_awaited_once_with(scheduled_time="2026-06-01T13:30:00Z")
 
@@ -143,8 +142,7 @@ class TestEmergencyCheckIndependentOfSchedulerAndAI:
         mock_notifier = MagicMock()
         mock_notifier.send_pipeline_log = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             asyncio.run(trading_core.emergency_check())
 
         mock_trader.execute_emergency_liquidation.assert_called_once()
@@ -160,10 +158,12 @@ class TestEmergencyCheckIndependentOfSchedulerAndAI:
         mock_notifier = MagicMock()
         mock_notifier.send_pipeline_log = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier), \
-             patch.object(trading_core, "grok", None), \
-             patch.object(trading_core, "opus", None):
+        with (
+            patch.object(trading_core, "trader", mock_trader),
+            patch.object(trading_core, "notifier", mock_notifier),
+            patch.object(trading_core, "grok", None),
+            patch.object(trading_core, "opus", None),
+        ):
             asyncio.run(trading_core.emergency_check())
             mock_trader.execute_emergency_liquidation.assert_called_once()
             # never touched Grok/Opus, even with the keys missing
@@ -208,8 +208,7 @@ class TestEmergencyLiquidationFailureHandling:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(EmergencyLiquidationFailed):
                 asyncio.run(trading_core.emergency_check())
 
@@ -232,8 +231,7 @@ class TestEmergencyLiquidationFailureHandling:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(EmergencyLiquidationFailed):
                 asyncio.run(trading_core.emergency_check())
 
@@ -253,8 +251,7 @@ class TestEmergencyLiquidationFailureHandling:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(RuntimeError):
                 asyncio.run(trading_core.emergency_check())
 
@@ -274,8 +271,7 @@ class TestEmergencyLiquidationFailureHandling:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             asyncio.run(trading_core.emergency_check())  # must not raise
 
         mock_notifier.notify_alert.assert_not_called()
@@ -301,8 +297,7 @@ class TestEmergencyLiquidationFailureHandling:
 
         monkeypatch.setattr(trading_core, "set_scheduler_state", boom)
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(EmergencyLiquidationFailed) as exc_info:
                 asyncio.run(trading_core.emergency_check())
 
@@ -325,8 +320,7 @@ class TestEmergencyLiquidationFailureHandling:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock(side_effect=RuntimeError("Discord webhook down"))
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(EmergencyLiquidationFailed) as exc_info:
                 asyncio.run(trading_core.emergency_check())
 
@@ -346,8 +340,7 @@ class TestEmergencyLiquidationFailureHandling:
         mock_notifier = MagicMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(RuntimeError, match="Alpaca API down"):
                 asyncio.run(trading_core.emergency_check())
 
@@ -376,8 +369,7 @@ class TestEmergencyLiquidationFailureHandling:
 
         monkeypatch.setattr(trading_core, "set_scheduler_state", boom)
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(EmergencyLiquidationFailed, match="stop flag write failed"):
                 asyncio.run(trading_core.emergency_check())
 
@@ -403,8 +395,7 @@ class TestEmergencyLiquidationFailureHandling:
 
         monkeypatch.setattr(trading_core, "record_emergency_liquidation", boom)
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(EmergencyLiquidationFailed, match="liquidation record write failed"):
                 asyncio.run(trading_core.emergency_check())
 
@@ -422,8 +413,7 @@ class TestEmergencyLiquidationFailureHandling:
         mock_notifier = MagicMock()
         mock_notifier.notify_alert = AsyncMock(side_effect=RuntimeError("Discord webhook down"))
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(RuntimeError, match="Alpaca API down"):
                 asyncio.run(trading_core.emergency_check())
 
@@ -447,8 +437,7 @@ class TestEmergencyCheckLockFailOpen:
         mock_trader.get_account.return_value = {"equity": 100.0, "last_equity": 100.0}  # no drawdown
         mock_notifier = MagicMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             asyncio.run(trading_core.emergency_check())  # must not raise, must not skip
 
         mock_trader.get_account.assert_called_once()
@@ -481,9 +470,11 @@ class TestEmergencyLiquidationDailyDedup:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier), \
-             patch.object(trading_core, "acquire_lock", return_value=True):
+        with (
+            patch.object(trading_core, "trader", mock_trader),
+            patch.object(trading_core, "notifier", mock_notifier),
+            patch.object(trading_core, "acquire_lock", return_value=True),
+        ):
             asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-01T14:00:00Z"))
             asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-01T14:05:00Z"))
 
@@ -504,8 +495,7 @@ class TestEmergencyLiquidationDailyDedup:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(EmergencyLiquidationFailed):
                 asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-01T14:00:00Z"))
 
@@ -521,9 +511,11 @@ class TestEmergencyLiquidationDailyDedup:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier), \
-             patch.object(trading_core, "acquire_lock", return_value=True):
+        with (
+            patch.object(trading_core, "trader", mock_trader),
+            patch.object(trading_core, "notifier", mock_notifier),
+            patch.object(trading_core, "acquire_lock", return_value=True),
+        ):
             asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-01T14:00:00Z"))
             asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-02T14:00:00Z"))
 
@@ -543,8 +535,7 @@ class TestEmergencyLiquidationDailyDedup:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             asyncio.run(trading_core.emergency_check())
 
         mock_trader.execute_emergency_liquidation.assert_not_called()
@@ -566,8 +557,7 @@ class TestEmergencyLiquidationDailyDedup:
         mock_notifier = MagicMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(EmergencyLiquidationFailed, match="cancel pending orders failed"):
                 asyncio.run(trading_core.emergency_check())
 
@@ -590,8 +580,7 @@ class TestEmergencyLiquidationDailyDedup:
 
         monkeypatch.setattr(trading_core, "set_scheduler_state", boom)
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             with pytest.raises(EmergencyLiquidationFailed, match="stop flag write failed"):
                 asyncio.run(trading_core.emergency_check())
 
@@ -614,8 +603,7 @@ class TestEmergencyLiquidationDailyDedup:
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
 
-        with patch.object(trading_core, "trader", mock_trader), \
-             patch.object(trading_core, "notifier", mock_notifier):
+        with patch.object(trading_core, "trader", mock_trader), patch.object(trading_core, "notifier", mock_notifier):
             asyncio.run(trading_core.emergency_check())
 
         mock_trader.execute_emergency_liquidation.assert_called_once()

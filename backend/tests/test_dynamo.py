@@ -1,4 +1,5 @@
 """DynamoDB data-layer tests (moto-backed)."""
+
 import time
 from unittest.mock import MagicMock
 
@@ -8,6 +9,7 @@ import pytest
 @pytest.fixture
 def dyn(dynamo_table):
     import db.dynamo as d
+
     return d
 
 
@@ -107,8 +109,10 @@ class TestPipelineLog:
 
     def test_blocked_cycle(self, dyn):
         dyn.log_pipeline(
-            cycle_id="cycle-2", decision_engine="grok",
-            rg_passed=False, rg_reason="confidence_too_low: 30",
+            cycle_id="cycle-2",
+            decision_engine="grok",
+            rg_passed=False,
+            rg_reason="confidence_too_low: 30",
         )
         log = dyn.get_pipeline_logs(1)[0]
         assert log["risk_guard_passed"] is False
@@ -124,9 +128,11 @@ class TestPipelineLog:
     def test_decisions_view_is_a_summary(self, dyn):
         """/decisions returns the summary fields, not the full Grok payload."""
         dyn.log_pipeline(
-            cycle_id="cycle-4", decision_engine="grok",
+            cycle_id="cycle-4",
+            decision_engine="grok",
             grok_output={"sentiment": {"overall": 10}},
-            opus_output={"action": "hold"}, rg_passed=True,
+            opus_output={"action": "hold"},
+            rg_passed=True,
         )
         d = dyn.get_decisions(1)[0]
         assert d["opus_output"]["action"] == "hold"

@@ -1,4 +1,5 @@
 """Trader unit tests - comprehensive edge cases and error handling"""
+
 import os
 from datetime import datetime
 from unittest.mock import MagicMock, patch
@@ -13,11 +14,9 @@ class TestTraderInit:
 
     def test_init_paper_trading(self):
         """Test initialization in paper trading mode"""
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     Trader()
@@ -25,11 +24,9 @@ class TestTraderInit:
 
     def test_init_live_trading(self):
         """Test initialization in live trading mode"""
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "false"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "false"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     Trader()
@@ -37,10 +34,7 @@ class TestTraderInit:
 
     def test_init_default_paper(self):
         """Test default is paper trading when env var not set"""
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret"
-        }, clear=True):
+        with patch.dict(os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret"}, clear=True):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     Trader()
@@ -52,11 +46,9 @@ class TestGetAccount:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     t = Trader()
@@ -120,11 +112,9 @@ class TestGetPositions:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     t = Trader()
@@ -194,11 +184,9 @@ class TestGetMarketData:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient"):
                 with patch("trader.StockHistoricalDataClient") as mock_data:
                     t = Trader()
@@ -236,10 +224,7 @@ class TestGetMarketData:
         mock_bar_tsla2 = MagicMock(close=250.0, volume=4500000)
 
         mock_bars = MagicMock()
-        mock_bars.data = {
-            "MSTR": [mock_bar_mstr1, mock_bar_mstr2],
-            "TSLA": [mock_bar_tsla1, mock_bar_tsla2]
-        }
+        mock_bars.data = {"MSTR": [mock_bar_mstr1, mock_bar_mstr2], "TSLA": [mock_bar_tsla1, mock_bar_tsla2]}
         mock_data_client.get_stock_bars.return_value = mock_bars
 
         result = t.get_market_data(["MSTR", "TSLA"])
@@ -300,11 +285,9 @@ class TestExecuteOrder:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     t = Trader()
@@ -324,11 +307,7 @@ class TestExecuteOrder:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=10
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=10)
 
         assert result is not None
         assert result["order_id"] == "order-123"
@@ -350,11 +329,7 @@ class TestExecuteOrder:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="sell",
-            quantity=5
-        )
+        result = t.execute_order(symbol="MSTR", action="sell", quantity=5)
 
         assert result is not None
         assert result["side"] == "sell"
@@ -373,13 +348,7 @@ class TestExecuteOrder:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=10,
-            order_type="limit",
-            limit_price=350.0
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=10, order_type="limit", limit_price=350.0)
 
         assert result is not None
         assert result["type"] == "limit"
@@ -388,11 +357,7 @@ class TestExecuteOrder:
         """Test order with invalid action"""
         t, mock_client = trader
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="hold",
-            quantity=10
-        )
+        result = t.execute_order(symbol="MSTR", action="hold", quantity=10)
 
         assert result is None
 
@@ -400,11 +365,7 @@ class TestExecuteOrder:
         """Test order with zero quantity"""
         t, mock_client = trader
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=0
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=0)
 
         assert result is None
 
@@ -412,11 +373,7 @@ class TestExecuteOrder:
         """Test order with negative quantity"""
         t, mock_client = trader
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=-10
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=-10)
 
         assert result is None
 
@@ -425,11 +382,7 @@ class TestExecuteOrder:
         t, mock_client = trader
         mock_client.submit_order.side_effect = Exception("Insufficient buying power")
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=1000000
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=1000000)
 
         assert result is None
 
@@ -447,11 +400,7 @@ class TestExecuteOrder:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=10
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=10)
 
         # Order returned but with rejected status
         assert result is not None
@@ -463,11 +412,9 @@ class TestGetOrderStatus:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     t = Trader()
@@ -541,11 +488,9 @@ class TestTraderEdgeCases:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient") as mock_data:
                     t = Trader()
@@ -565,11 +510,7 @@ class TestTraderEdgeCases:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="BRK.B",
-            action="buy",
-            quantity=1
-        )
+        result = t.execute_order(symbol="BRK.B", action="buy", quantity=1)
 
         assert result is not None
         assert result["symbol"] == "BRK.B"
@@ -601,11 +542,7 @@ class TestTraderEdgeCases:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=1000000
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=1000000)
 
         assert result is not None
         assert result["qty"] == 1000000.0
@@ -615,11 +552,7 @@ class TestTraderEdgeCases:
         t, mock_client, _ = trader
 
         # Note: Alpaca supports fractional shares for some accounts
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=0.5
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=0.5)
 
         # Current implementation checks quantity > 0, and 0.5 > 0 is True
         # so the order gets submitted (Alpaca may handle fractional shares)
@@ -636,20 +569,24 @@ class TestDataFeed:
         def _make():
             with patch("trader.TradingClient"), patch("trader.StockHistoricalDataClient"):
                 return Trader()
+
         return _make
 
     def test_defaults_to_iex(self, make_trader, monkeypatch):
         from alpaca.data.enums import DataFeed
+
         monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
         assert make_trader().data_feed == DataFeed.IEX
 
     def test_feed_is_overridable(self, make_trader, monkeypatch):
         from alpaca.data.enums import DataFeed
+
         monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
         assert make_trader().data_feed == DataFeed.SIP
 
     def test_request_carries_the_feed(self, make_trader, monkeypatch):
         from alpaca.data.enums import DataFeed
+
         monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
         t = make_trader()
 
@@ -676,9 +613,14 @@ class TestProtectiveOrders:
 
     @pytest.fixture
     def bracket_trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s", "ALPACA_PAPER": "true",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "ALPACA_API_KEY": "k",
+                "ALPACA_SECRET_KEY": "s",
+                "ALPACA_PAPER": "true",
+            },
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     t = Trader()
@@ -698,6 +640,7 @@ class TestProtectiveOrders:
 
     def test_both_legs_make_a_bracket(self, bracket_trader):
         from alpaca.trading.enums import OrderClass
+
         t, mock_client = bracket_trader
         t.execute_order("MSTR", "buy", 7, stop_loss=120.0, take_profit=150.0)
 
@@ -709,6 +652,7 @@ class TestProtectiveOrders:
 
     def test_stop_loss_only_makes_an_oto(self, bracket_trader):
         from alpaca.trading.enums import OrderClass
+
         t, mock_client = bracket_trader
         t.execute_order("MSTR", "buy", 7, stop_loss=120.0)
 
@@ -753,6 +697,7 @@ class TestOpenBuyOrders:
         """Protective sells linger for held symbols; they must not look like a
         pending entry and block the next buy forever."""
         from alpaca.trading.enums import OrderSide
+
         t, mock_client = order_trader
 
         buy = self._order("MSTR", OrderSide.BUY)
@@ -788,6 +733,7 @@ class TestGetOpenBuyOrders:
 
     def test_returns_symbol_qty_limit_price_for_buys_only(self, order_trader):
         from alpaca.trading.enums import OrderSide
+
         t, mock_client = order_trader
 
         buy = self._order("MSTR", OrderSide.BUY, qty=10, limit_price=350.5)
@@ -800,6 +746,7 @@ class TestGetOpenBuyOrders:
 
     def test_market_buy_order_has_no_limit_price(self, order_trader):
         from alpaca.trading.enums import OrderSide
+
         t, mock_client = order_trader
 
         buy = self._order("QQQ", OrderSide.BUY, qty=3, limit_price=None)
@@ -849,10 +796,14 @@ class TestEmergencyLiquidation:
 
         results = t.execute_emergency_liquidation()
 
-        assert results == [{
-            "symbol": "TSLA", "status": 500, "ok": False,
-            "error": "insufficient qty available",
-        }]
+        assert results == [
+            {
+                "symbol": "TSLA",
+                "status": 500,
+                "ok": False,
+                "error": "insufficient qty available",
+            }
+        ]
 
     def test_mixed_success_and_failure(self, liquidation_trader):
         from alpaca.trading.models import FailedClosePositionDetails

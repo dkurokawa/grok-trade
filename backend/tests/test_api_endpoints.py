@@ -3,6 +3,7 @@
 Uses a moto-backed DynamoDB table so /trades, /decisions, /pipeline and the
 scheduler state exercise the real data path.
 """
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -31,8 +32,14 @@ def mock_trader(monkeypatch):
         "daily_pnl": 500.0,
     }
     t.get_positions.return_value = [
-        {"symbol": "MSTR", "qty": 10.0, "avg_entry_price": 350.0,
-         "market_value": 3600.0, "unrealized_pl": 100.0, "unrealized_plpc": 0.028}
+        {
+            "symbol": "MSTR",
+            "qty": 10.0,
+            "avg_entry_price": 350.0,
+            "market_value": 3600.0,
+            "unrealized_pl": 100.0,
+            "unrealized_plpc": 0.028,
+        }
     ]
     monkeypatch.setattr(app_module, "trader", t)
     return t
@@ -76,8 +83,12 @@ class TestStatusEndpoint:
 
     def test_zero_values(self, client, mock_trader):
         mock_trader.get_account.return_value = {
-            "cash": 0.0, "portfolio_value": 0.0, "buying_power": 0.0,
-            "equity": 0.0, "last_equity": 0.0, "daily_pnl": 0.0,
+            "cash": 0.0,
+            "portfolio_value": 0.0,
+            "buying_power": 0.0,
+            "equity": 0.0,
+            "last_equity": 0.0,
+            "daily_pnl": 0.0,
         }
         mock_trader.get_positions.return_value = []
         data = client.get("/status", headers=AUTH).json()
@@ -97,6 +108,7 @@ class TestStopStartEndpoints:
 
     def test_stop_then_start_toggles_state(self, client):
         import db.dynamo as dyn
+
         headers = {"x-api-key": SECRET}
 
         assert client.post("/stop", headers=headers).json()["status"] == "stopped"
@@ -132,10 +144,18 @@ class TestTradesEndpoint:
 
     def test_returns_seeded_trade(self, client):
         import db.dynamo as dyn
+
         dyn.log_trade(
-            cycle_id="c1", symbol="MSTR", action="buy", quantity=10.0, price=350.0,
-            order_type="market", status="filled", alpaca_order_id="o-1",
-            stop_loss=330.0, take_profit=400.0,
+            cycle_id="c1",
+            symbol="MSTR",
+            action="buy",
+            quantity=10.0,
+            price=350.0,
+            order_type="market",
+            status="filled",
+            alpaca_order_id="o-1",
+            stop_loss=330.0,
+            take_profit=400.0,
         )
         trades = client.get("/trades", headers=AUTH).json()["trades"]
         assert len(trades) == 1
@@ -156,10 +176,13 @@ class TestDecisionsEndpoint:
 
     def test_returns_seeded_decision(self, client):
         import db.dynamo as dyn
+
         dyn.log_pipeline(
-            cycle_id="c1", decision_engine="grok",
+            cycle_id="c1",
+            decision_engine="grok",
             opus_output={"action": "hold", "confidence": 60},
-            rg_passed=True, order_submitted=False,
+            rg_passed=True,
+            order_submitted=False,
         )
         decisions = client.get("/decisions", headers=AUTH).json()["decisions"]
         assert len(decisions) == 1
@@ -176,11 +199,17 @@ class TestPipelineEndpoint:
 
     def test_returns_full_cycle(self, client):
         import db.dynamo as dyn
+
         dyn.log_pipeline(
-            cycle_id="c1", decision_engine="grok",
-            grok_output={"sentiment": {"overall": 55}}, grok_latency_ms=120,
-            opus_output={"action": "buy"}, opus_latency_ms=700,
-            rg_passed=True, order_submitted=True, alpaca_order_id="o-1",
+            cycle_id="c1",
+            decision_engine="grok",
+            grok_output={"sentiment": {"overall": 55}},
+            grok_latency_ms=120,
+            opus_output={"action": "buy"},
+            opus_latency_ms=700,
+            rg_passed=True,
+            order_submitted=True,
+            alpaca_order_id="o-1",
         )
         logs = client.get("/pipeline", headers=AUTH).json()["logs"]
         assert logs[0]["grok_output"]["sentiment"]["overall"] == 55
@@ -200,6 +229,7 @@ class TestDatabaseError:
             raise RuntimeError("Database connection error")
 
         import db.dynamo as dyn
+
         monkeypatch.setattr(dyn, "_get_table", boom)
         monkeypatch.setattr(app_module, "get_trades", boom)
         monkeypatch.setattr(app_module, "get_decisions", boom)

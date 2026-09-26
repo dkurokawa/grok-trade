@@ -14,6 +14,7 @@ Stage 2 is selectable with DECISION_ENGINE:
   - opus : Claude Opus decides from Grok's report (the original design)
 Both return the same TradeDecision shape, so Risk Guard and execution are shared.
 """
+
 import os
 import uuid
 from datetime import datetime
@@ -74,6 +75,7 @@ def _slot_id(interval_minutes: int, now: datetime) -> str:
     floored_minute = (now_ny.minute // interval_minutes) * interval_minutes
     slot_time = now_ny.replace(minute=floored_minute, second=0, microsecond=0)
     return slot_time.strftime("%Y%m%dT%H%M")
+
 
 # Clients are built on first use rather than at import: Alpaca and the model
 # SDKs raise when their keys are absent, and failing at import turns a
@@ -179,9 +181,7 @@ async def _alert_startup_failure(job: str, error: Exception) -> None:
     """_ready() raised, so `notifier` may not have been constructed yet."""
     print(f"[Error] {job} startup failed: {error}")
     try:
-        await (notifier or DiscordNotifier()).notify_alert(
-            f"{job} startup failed: {error}", "error"
-        )
+        await (notifier or DiscordNotifier()).notify_alert(f"{job} startup failed: {error}", "error")
     except Exception as e:  # noqa: BLE001 - alerting must not mask the original error
         print(f"[Discord] Startup failure alert failed: {e}")
 
@@ -234,7 +234,7 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
 
     cycle_id = f"{slot}-{uuid.uuid4().hex[:8]}"
     engine = decision_engine()
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"[{datetime.now()}] Cycle {cycle_id} started (decision engine: {engine})")
     print("=" * 50)
 
@@ -293,9 +293,11 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
         except Exception as e:
             print(f"[Discord] Grok log failed: {e}")
 
-        print(f"[Grok] Sentiment: {grok_report['sentiment']['overall']} | "
-              f"Change: {grok_report['significant_change']} | "
-              f"Latency: {grok_latency}ms")
+        print(
+            f"[Grok] Sentiment: {grok_report['sentiment']['overall']} | "
+            f"Change: {grok_report['significant_change']} | "
+            f"Latency: {grok_latency}ms"
+        )
 
         # ログ共通項目
         base: dict[str, Any] = {
@@ -341,9 +343,7 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
         # いる銘柄、現在値を踏まえた損切り価格）が正しいことを仮定して動く。
         # AI がそれを満たさない判断を返したら、RiskGuard に渡す前に hold へ倒す。
         validation_symbol = decision.get("symbol")
-        validation_price = (
-            market_data.get(validation_symbol, {}).get("price") if validation_symbol else None
-        )
+        validation_price = market_data.get(validation_symbol, {}).get("price") if validation_symbol else None
         decision, invalid_reason = validate_decision(decision, WATCHLIST, positions, validation_price)
         if invalid_reason:
             print(f"[Validate] Decision failed validation, forcing hold: {invalid_reason}")
@@ -358,10 +358,12 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
         except Exception as e:
             print(f"[Discord] Decision log failed: {e}")
 
-        print(f"[{engine.capitalize()}] {decision['action'].upper()} {decision.get('symbol', '')} | "
-              f"Confidence: {decision['confidence']}% | "
-              f"Size: {decision.get('position_size_pct', 0)}% | "
-              f"Latency: {decision_latency}ms")
+        print(
+            f"[{engine.capitalize()}] {decision['action'].upper()} {decision.get('symbol', '')} | "
+            f"Confidence: {decision['confidence']}% | "
+            f"Size: {decision.get('position_size_pct', 0)}% | "
+            f"Latency: {decision_latency}ms"
+        )
 
         base.update(
             opus_output=decision,
@@ -390,9 +392,7 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
                 reason = f"open_buy_orders_unavailable: {e}"
                 print(f"[Execute] Skipping buy - could not check open buy orders: {e}")
                 try:
-                    await _notifier.notify_alert(
-                        f"Skipped buy: could not check open orders ({e})", "warning"
-                    )
+                    await _notifier.notify_alert(f"Skipped buy: could not check open orders ({e})", "warning")
                 except Exception as notify_err:
                     print(f"[Discord] Warning failed: {notify_err}")
                 log_pipeline(**base, rg_passed=False, rg_reason=reason)
@@ -416,18 +416,28 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
 
         if rg_result.adjustments:
             try:
-                await _notifier.send_pipeline_log(cycle_id, "risk_guard", {
-                    "passed": True, "adjustments": rg_result.adjustments,
-                })
+                await _notifier.send_pipeline_log(
+                    cycle_id,
+                    "risk_guard",
+                    {
+                        "passed": True,
+                        "adjustments": rg_result.adjustments,
+                    },
+                )
             except Exception as e:
                 print(f"[Discord] RiskGuard adjustment log failed: {e}")
             print(f"[RiskGuard] Adjustments: {len(rg_result.adjustments)}")
 
         if not rg_result.allowed:
             try:
-                await _notifier.send_pipeline_log(cycle_id, "risk_guard", {
-                    "passed": False, "reason": rg_result.reason,
-                })
+                await _notifier.send_pipeline_log(
+                    cycle_id,
+                    "risk_guard",
+                    {
+                        "passed": False,
+                        "reason": rg_result.reason,
+                    },
+                )
             except Exception as e:
                 print(f"[Discord] RiskGuard block log failed: {e}")
             print(f"[RiskGuard] BLOCKED: {rg_result.reason}")
@@ -689,8 +699,10 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
                     # F4: 保有はゼロでも、未約定の買い注文が残っていればそれが
                     # 約定して新規にポジションを持ってしまう。清算する保有は
                     # 無いが、停止と未約定注文の取り消しは行う。
-                    print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5%, but nothing is held - "
-                          f"stopping and cancelling any pending orders")
+                    print(
+                        f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5%, but nothing is held - "
+                        f"stopping and cancelling any pending orders"
+                    )
                     no_position_failures: list[str] = []
                     try:
                         _trader.cancel_all_orders()
@@ -722,12 +734,16 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
                 try:
                     already_handled_today = emergency_liquidation_recorded_for(today)
                 except Exception as e:  # noqa: BLE001
-                    print(f"[DB] Could not check emergency liquidation record for {today}: "
-                          f"{e} - continuing anyway (fail open)")
+                    print(
+                        f"[DB] Could not check emergency liquidation record for {today}: "
+                        f"{e} - continuing anyway (fail open)"
+                    )
                     already_handled_today = False
                 if already_handled_today:
-                    print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5%, and today's liquidation "
-                          f"was already recorded, but positions still remain - retrying")
+                    print(
+                        f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5%, and today's liquidation "
+                        f"was already recorded, but positions still remain - retrying"
+                    )
 
                 print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5% → liquidating")
 
@@ -757,10 +773,14 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
                     reason += " - LIQUIDATION FAILED, see error alert"
 
                 try:
-                    await _notifier.send_pipeline_log("EMERGENCY", "risk_guard", {
-                        "passed": False,
-                        "reason": reason,
-                    })
+                    await _notifier.send_pipeline_log(
+                        "EMERGENCY",
+                        "risk_guard",
+                        {
+                            "passed": False,
+                            "reason": reason,
+                        },
+                    )
                 except Exception as e:
                     print(f"[Discord] Emergency log failed: {e}")
                     extra_failures.append(f"pipeline log failed: {e}")
@@ -785,9 +805,7 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
                         if liquidation_error:
                             detail = str(liquidation_error)
                         else:
-                            detail = "; ".join(
-                                f"{r['symbol']}: {r.get('error', r['status'])}" for r in failed
-                            )
+                            detail = "; ".join(f"{r['symbol']}: {r.get('error', r['status'])}" for r in failed)
                     else:
                         detail = "liquidation orders submitted successfully"
                     if extra_failures:
@@ -795,9 +813,7 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
 
                     print(f"[EMERGENCY] Liquidation failed or incomplete: {detail}")
                     try:
-                        await _notifier.notify_alert(
-                            f"Emergency liquidation failed or incomplete: {detail}", "error"
-                        )
+                        await _notifier.notify_alert(f"Emergency liquidation failed or incomplete: {detail}", "error")
                     except Exception as e:
                         print(f"[Discord] Failure alert failed: {e}")
                         detail += f" | also: alert failed: {e}"

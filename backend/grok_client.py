@@ -1,4 +1,5 @@
 """Grok API クライアント - 市場情報収集 / 売買判断（DECISION_ENGINE=grok 時）"""
+
 import json
 import os
 import time
@@ -53,10 +54,7 @@ NO_PREVIOUS_SENTIMENT = "前回データなし"
 
 class GrokClient:
     def __init__(self):
-        self.client = OpenAI(
-            api_key=os.getenv("GROK_API_KEY"),
-            base_url="https://api.x.ai/v1"
-        )
+        self.client = OpenAI(api_key=os.getenv("GROK_API_KEY"), base_url="https://api.x.ai/v1")
         self.model = os.getenv("GROK_MODEL", "grok-3-mini")
 
     def collect_market_report(

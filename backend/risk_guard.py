@@ -1,4 +1,5 @@
 """Risk Guard - 損失上限・ポジション制限・Opus判断の安全弁"""
+
 import math
 import os
 from dataclasses import dataclass, field
@@ -78,22 +79,26 @@ class RiskGuard:
         # 4. ポジションサイズ上限
         pct = decision.get("position_size_pct", 0)
         if pct > self.max_position_pct:
-            adjustments.append({
-                "field": "position_size_pct",
-                "original": pct,
-                "adjusted": self.max_position_pct,
-                "reason": f"Risk Guard: 上限{self.max_position_pct}%に制限",
-            })
+            adjustments.append(
+                {
+                    "field": "position_size_pct",
+                    "original": pct,
+                    "adjusted": self.max_position_pct,
+                    "reason": f"Risk Guard: 上限{self.max_position_pct}%に制限",
+                }
+            )
             pct = self.max_position_pct
 
         # 5. 単一トレード上限
         if pct > self.max_single_trade_pct:
-            adjustments.append({
-                "field": "position_size_pct",
-                "original": pct,
-                "adjusted": self.max_single_trade_pct,
-                "reason": f"Risk Guard: 単一トレード上限{self.max_single_trade_pct}%に制限",
-            })
+            adjustments.append(
+                {
+                    "field": "position_size_pct",
+                    "original": pct,
+                    "adjusted": self.max_single_trade_pct,
+                    "reason": f"Risk Guard: 単一トレード上限{self.max_single_trade_pct}%に制限",
+                }
+            )
             pct = self.max_single_trade_pct
 
         decision["position_size_pct"] = pct
@@ -108,20 +113,20 @@ class RiskGuard:
 
         # 指値なら現在値と指値の高い方を使う（低く見積もって株数上限を
         # すり抜けさせない）。成行ならそのまま現在値。
-        effective_price = effective_buy_price(
-            price, decision.get("order_type", "market"), decision.get("limit_price")
-        )
+        effective_price = effective_buy_price(price, decision.get("order_type", "market"), decision.get("limit_price"))
 
         max_qty = math.floor(equity * pct / 100 / effective_price)
         requested_qty = decision.get("quantity", 0) or 0
         quantity = min(requested_qty, max_qty)
         if quantity < requested_qty:
-            adjustments.append({
-                "field": "quantity",
-                "original": requested_qty,
-                "adjusted": quantity,
-                "reason": f"Risk Guard: ポジションサイズ{pct}%相当の{max_qty}株に制限",
-            })
+            adjustments.append(
+                {
+                    "field": "quantity",
+                    "original": requested_qty,
+                    "adjusted": quantity,
+                    "reason": f"Risk Guard: ポジションサイズ{pct}%相当の{max_qty}株に制限",
+                }
+            )
         decision["quantity"] = quantity
 
         if quantity == 0:
@@ -134,9 +139,7 @@ class RiskGuard:
         current_positions = portfolio.get("positions", [])
         open_buy_order_value = portfolio.get("open_buy_order_value", 0)
         order_value = quantity * effective_price
-        total_position_value = (
-            sum(p.get("market_value", 0) for p in current_positions) + open_buy_order_value
-        )
+        total_position_value = sum(p.get("market_value", 0) for p in current_positions) + open_buy_order_value
         new_ratio = (total_position_value + order_value) / equity
         max_ratio = self.max_position_pct / 100
         if new_ratio > max_ratio:

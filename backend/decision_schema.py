@@ -6,6 +6,7 @@ RiskGuard.check() はルールベースの安全弁だが、そもそも AI が�
 すれば、check() 自身の前提が壊れる。ここで弾くのはそのクラスの不正な入力で、
 検証に失敗した判断は例外を投げず hold に倒す（取引はしない）。
 """
+
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, ValidationInfo, model_validator
@@ -52,9 +53,7 @@ class TradeDecision(BaseModel):
         if self.action == "sell":
             held_qty = held_symbols.get(self.symbol, 0)
             if self.quantity > held_qty:
-                raise ValueError(
-                    f"quantity {self.quantity} exceeds held quantity {held_qty} for {self.symbol!r}"
-                )
+                raise ValueError(f"quantity {self.quantity} exceeds held quantity {held_qty} for {self.symbol!r}")
 
         if self.order_type == "limit" and not (self.limit_price and self.limit_price > 0):
             raise ValueError("limit_price must be > 0 for a limit order")
@@ -74,10 +73,7 @@ class TradeDecision(BaseModel):
                 lower_bound = current_price * 0.9
                 upper_bound = current_price * 1.1
                 if not (lower_bound <= limit_price <= upper_bound):
-                    raise ValueError(
-                        f"limit_price {limit_price} is outside ±10% of "
-                        f"current price ({current_price})"
-                    )
+                    raise ValueError(f"limit_price {limit_price} is outside ±10% of current price ({current_price})")
 
             # stop_loss/take_profit の基準は「実際に買うつもりの価格」(E8)。
             # 指値なら limit_price - 指値90・損切り95は、現在値100を基準にすると
@@ -87,13 +83,11 @@ class TradeDecision(BaseModel):
 
             if not (self.stop_loss and 0 < self.stop_loss < reference_price):
                 raise ValueError(
-                    f"stop_loss must be > 0 and < reference price ({reference_price}) for buy, "
-                    f"got {self.stop_loss}"
+                    f"stop_loss must be > 0 and < reference price ({reference_price}) for buy, got {self.stop_loss}"
                 )
             if self.take_profit is not None and self.take_profit <= reference_price:
                 raise ValueError(
-                    f"take_profit must be > reference price ({reference_price}) for buy, "
-                    f"got {self.take_profit}"
+                    f"take_profit must be > reference price ({reference_price}) for buy, got {self.take_profit}"
                 )
 
         return self

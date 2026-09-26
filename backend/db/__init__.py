@@ -1,4 +1,5 @@
 """Data layer (DynamoDB, single-table, on-demand)."""
+
 from .dynamo import (
     acquire_lock,
     emergency_liquidation_recorded_for,

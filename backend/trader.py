@@ -1,4 +1,5 @@
 """Trader - Alpaca取引実行モジュール"""
+
 import os
 from datetime import datetime, timedelta
 from typing import Any
@@ -96,7 +97,8 @@ class Trader:
                 "qty": float(o.qty) if o.qty else 0.0,
                 "limit_price": float(o.limit_price) if o.limit_price else None,
             }
-            for o in orders if o.side == OrderSide.BUY
+            for o in orders
+            if o.side == OrderSide.BUY
         ]
 
     def get_open_buy_order_symbols(self) -> set:
@@ -207,11 +209,15 @@ class Trader:
                 not_found = isinstance(e, APIError) and e.status_code == 404
                 if not not_found:
                     if action == "buy":
-                        print(f"[Trader] Could not confirm duplicate for buy {symbol} "
-                              f"(client_order_id={client_order_id}): {e} - skipping buy")
+                        print(
+                            f"[Trader] Could not confirm duplicate for buy {symbol} "
+                            f"(client_order_id={client_order_id}): {e} - skipping buy"
+                        )
                         return None
-                    print(f"[Trader] Could not confirm duplicate for sell {symbol} "
-                          f"(client_order_id={client_order_id}): {e} - proceeding anyway")
+                    print(
+                        f"[Trader] Could not confirm duplicate for sell {symbol} "
+                        f"(client_order_id={client_order_id}): {e} - proceeding anyway"
+                    )
                 # 404 (not_found): 既存注文なし、通常どおり発注へ進む。
             else:
                 assert not isinstance(existing, dict)  # see get_account()
@@ -280,8 +286,9 @@ class Trader:
                 "submitted_at": str(order.submitted_at),
             }
             if protective:
-                print(f"[Trader] {protective['order_class'].value} order: "
-                      f"stop_loss={stop_loss} take_profit={take_profit}")
+                print(
+                    f"[Trader] {protective['order_class'].value} order: stop_loss={stop_loss} take_profit={take_profit}"
+                )
 
             return result
 
@@ -334,8 +341,9 @@ class Trader:
             if ok:
                 print(f"[Trader] Emergency close: {r.symbol} (status {r.status})")
             else:
-                print(f"[Trader] Emergency close FAILED: {r.symbol} "
-                      f"(status {r.status}): {entry.get('error', 'unknown')}")
+                print(
+                    f"[Trader] Emergency close FAILED: {r.symbol} (status {r.status}): {entry.get('error', 'unknown')}"
+                )
         return results
 
     def cancel_all_orders(self) -> None:

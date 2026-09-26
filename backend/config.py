@@ -9,6 +9,7 @@ os.getenv(...) unchanged.
 Locally, if the env vars are already set (e.g. via .env / dotenv), the SSM
 call is skipped entirely.
 """
+
 import os
 
 # SSM parameter names (without prefix) that map 1:1 to env vars.
@@ -86,9 +87,7 @@ def load_secrets():
         ssm = boto3.client("ssm")
         # get_parameters_by_path pulls the whole prefix in one (paginated) call.
         paginator = ssm.get_paginator("get_parameters_by_path")
-        for page in paginator.paginate(
-            Path=_SSM_PREFIX, Recursive=True, WithDecryption=True
-        ):
+        for page in paginator.paginate(Path=_SSM_PREFIX, Recursive=True, WithDecryption=True):
             for param in page["Parameters"]:
                 name = param["Name"].rsplit("/", 1)[-1]
                 # Never override an explicitly-set env var (useful for local/testing).
