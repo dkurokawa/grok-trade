@@ -486,6 +486,21 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
                 )
                 return
 
+        # The cycle has been waiting on the AI stages for a while. An emergency
+        # check (or /stop) may have halted trading and cancelled every order in
+        # the meantime, so re-read the flag right before sending anything.
+        # get_scheduler_state() fails closed: a read error also counts as stopped.
+        if not get_scheduler_state():
+            print(f"[Execute] Skipped {symbol}: trading was stopped during this cycle")
+            log_pipeline(
+                **base,
+                rg_passed=True,
+                rg_adjustments=rg_result.adjustments,
+                order_submitted=False,
+                execution_result={"skipped": "stopped_during_cycle"},
+            )
+            return
+
         try:
             order = _trader.execute_order(
                 symbol=symbol,
