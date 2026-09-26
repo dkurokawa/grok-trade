@@ -261,7 +261,7 @@ class TestAPIIntegration:
         assert "scheduler_running" in response.json()
 
     def test_status_includes_all_data(self, client):
-        response = client.get("/status")
+        response = client.get("/status", headers={"x-api-key": self.SECRET})
         assert response.status_code == 200
         data = response.json()
         assert data["account"]["cash"] == 100000.0
@@ -289,7 +289,7 @@ class TestAPIIntegration:
         import db.dynamo as dyn
         dyn.log_pipeline(cycle_id="c1", decision_engine="opus", grok_latency_ms=90)
 
-        response = client.get("/pipeline")
+        response = client.get("/pipeline", headers={"x-api-key": self.SECRET})
         assert response.status_code == 200
         logs = response.json()["logs"]
         assert len(logs) == 1

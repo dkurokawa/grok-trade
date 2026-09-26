@@ -136,13 +136,13 @@ export default function Dashboard() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [activeTab, setActiveTab] = useState<"trades" | "decisions">("trades");
 
-  // Lambda Function URL は末尾スラッシュ付きで払い出されるため取り除く
-  const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
+  // ブラウザから backend を直接叩かず、サーバー側で x-api-key を付与する
+  // Next.js の中継ルート (api/backend/[...path]) 経由でのみアクセスする。
   const TRADING_INTERVAL = 1800; // 30分（市場時間中、毎時0分と30分）
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch(`${API_URL}/status`);
+      const res = await fetch("/api/backend/status");
       if (!res.ok) throw new Error("Failed to fetch status");
       const data = await res.json();
       setStatus(data);
@@ -158,8 +158,8 @@ export default function Dashboard() {
   const fetchHistory = async () => {
     try {
       const [tradesRes, decisionsRes] = await Promise.all([
-        fetch(`${API_URL}/trades?limit=20`),
-        fetch(`${API_URL}/decisions?limit=20`)
+        fetch("/api/backend/trades?limit=20"),
+        fetch("/api/backend/decisions?limit=20")
       ]);
       if (tradesRes.ok) {
         const data = await tradesRes.json();

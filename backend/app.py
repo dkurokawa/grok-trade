@@ -4,6 +4,7 @@ Served via a Lambda Function URL. Routes match the old Fly service except that
 scheduler state and logs now live in DynamoDB, and /start /stop require a
 shared secret (previously anyone could stop the bot).
 """
+import hmac
 import os
 from datetime import datetime
 from typing import Optional
@@ -22,8 +23,7 @@ sentry_sdk.init(
     integrations=[FastApiIntegration()],
 )
 
-from fastapi import FastAPI, Header, HTTPException  # noqa: E402
-from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi import Depends, FastAPI, Header, HTTPException  # noqa: E402
 from mangum import Mangum  # noqa: E402
 
 from config import decision_engine, missing_required, secrets_status  # noqa: E402
@@ -63,21 +63,20 @@ MAX_LIMIT = 1000
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 本番では Dashboard の URL に限定推奨
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORSMiddleware: the browser never calls this API directly (see
+# _require_secret below and dashboard/src/app/api/backend/[...path]/route.ts).
+# The dashboard's Next.js server proxies requests and attaches x-api-key
+# server-side, so there is no cross-origin browser call to allow.
 
 
-def _require_secret(x_api_key: Optional[str]):
-    """Guard mutating endpoints with a shared secret header.
+def _require_secret(x_api_key: Optional[str] = Header(default=None)):
+    """Guard every endpoint except /health with a shared secret header.
 
-    The secret is read per request rather than snapshotted at import: if the
-    cold-start SSM fetch failed, caching the empty value would wedge /stop -
-    the kill switch - at 503 for the whole life of that container.
+    Used as a FastAPI dependency so every mutating *and* read endpoint enforces
+    it consistently (the Function URL has AuthType: NONE, so this is the only
+    auth layer). The secret is read per request rather than snapshotted at
+    import: if the cold-start SSM fetch failed, caching the empty value would
+    wedge /stop - the kill switch - at 503 for the whole life of that container.
     """
     secret = os.getenv("API_SHARED_SECRET", "")
     if not secret:
@@ -85,7 +84,7 @@ def _require_secret(x_api_key: Optional[str]):
         secret = os.getenv("API_SHARED_SECRET", "")
     if not secret:
         raise HTTPException(status_code=503, detail="API secret not configured")
-    if x_api_key != secret:
+    if not hmac.compare_digest(x_api_key or "", secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -108,7 +107,7 @@ async def health():
     }
 
 
-@app.get("/status")
+@app.get("/status", dependencies=[Depends(_require_secret)])
 async def status():
     missing = [k for k in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY") if not os.getenv(k)]
     if missing:
@@ -124,25 +123,23 @@ async def status():
     }
 
 
-@app.post("/stop")
-async def stop(x_api_key: Optional[str] = Header(default=None)):
+@app.post("/stop", dependencies=[Depends(_require_secret)])
+async def stop():
     """緊急停止（要シークレット）"""
-    _require_secret(x_api_key)
     set_scheduler_state(False)
     await _get_notifier().notify_system_stop("Manual stop via API")
     return {"status": "stopped"}
 
 
-@app.post("/start")
-async def start(x_api_key: Optional[str] = Header(default=None)):
+@app.post("/start", dependencies=[Depends(_require_secret)])
+async def start():
     """再開（要シークレット）"""
-    _require_secret(x_api_key)
     set_scheduler_state(True)
     await _get_notifier().notify_alert("Bot resumed", "info")
     return {"status": "running"}
 
 
-@app.get("/trades")
+@app.get("/trades", dependencies=[Depends(_require_secret)])
 async def trades(limit: int = 50):
     """取引履歴取得"""
     try:
@@ -151,7 +148,7 @@ async def trades(limit: int = 50):
         return {"trades": [], "error": str(e)}
 
 
-@app.get("/decisions")
+@app.get("/decisions", dependencies=[Depends(_require_secret)])
 async def decisions(limit: int = 50):
     """パイプラインの判断サマリー"""
     try:
@@ -160,7 +157,7 @@ async def decisions(limit: int = 50):
         return {"decisions": [], "error": str(e)}
 
 
-@app.get("/pipeline")
+@app.get("/pipeline", dependencies=[Depends(_require_secret)])
 async def pipeline(limit: int = 50):
     """パイプライン全体ログ取得"""
     try:

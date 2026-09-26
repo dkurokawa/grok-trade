@@ -78,7 +78,7 @@ class TestGuardRails:
         from fastapi.testclient import TestClient
 
         monkeypatch.delenv("ALPACA_API_KEY", raising=False)
-        r = TestClient(app.app).get("/status")
+        r = TestClient(app.app).get("/status", headers={"x-api-key": "test_shared_secret"})
         assert r.status_code == 503
         assert "ALPACA_API_KEY" in r.json()["detail"]
 

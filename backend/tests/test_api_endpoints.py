@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import app as app_module
 
 SECRET = "test_shared_secret"  # matches conftest API_SHARED_SECRET
+AUTH = {"x-api-key": SECRET}
 
 
 @pytest.fixture
@@ -64,8 +65,11 @@ class TestHealthEndpoint:
 
 
 class TestStatusEndpoint:
+    def test_requires_secret(self, client):
+        assert client.get("/status").status_code == 401
+
     def test_returns_account_and_positions(self, client, mock_trader):
-        data = client.get("/status").json()
+        data = client.get("/status", headers=AUTH).json()
         assert data["account"]["cash"] == 100000.0
         assert data["positions"][0]["symbol"] == "MSTR"
         assert "scheduler_running" in data
@@ -76,7 +80,7 @@ class TestStatusEndpoint:
             "equity": 0.0, "last_equity": 0.0, "daily_pnl": 0.0,
         }
         mock_trader.get_positions.return_value = []
-        data = client.get("/status").json()
+        data = client.get("/status", headers=AUTH).json()
         assert data["account"]["cash"] == 0.0
         assert data["positions"] == []
 
@@ -107,6 +111,9 @@ class TestStopStartEndpoints:
 
 
 class TestTradesEndpoint:
+    def test_requires_secret(self, client):
+        assert client.get("/trades").status_code == 401
+
     def test_returns_seeded_trade(self, client):
         import db.dynamo as dyn
         dyn.log_trade(
@@ -114,20 +121,23 @@ class TestTradesEndpoint:
             order_type="market", status="filled", alpaca_order_id="o-1",
             stop_loss=330.0, take_profit=400.0,
         )
-        trades = client.get("/trades").json()["trades"]
+        trades = client.get("/trades", headers=AUTH).json()["trades"]
         assert len(trades) == 1
         assert trades[0]["symbol"] == "MSTR"
         assert trades[0]["stop_loss"] == 330.0
         assert trades[0]["cycle_id"] == "c1"
 
     def test_empty(self, client):
-        assert client.get("/trades").json()["trades"] == []
+        assert client.get("/trades", headers=AUTH).json()["trades"] == []
 
     def test_with_limit(self, client):
-        assert client.get("/trades?limit=10").status_code == 200
+        assert client.get("/trades?limit=10", headers=AUTH).status_code == 200
 
 
 class TestDecisionsEndpoint:
+    def test_requires_secret(self, client):
+        assert client.get("/decisions").status_code == 401
+
     def test_returns_seeded_decision(self, client):
         import db.dynamo as dyn
         dyn.log_pipeline(
@@ -135,16 +145,19 @@ class TestDecisionsEndpoint:
             opus_output={"action": "hold", "confidence": 60},
             rg_passed=True, order_submitted=False,
         )
-        decisions = client.get("/decisions").json()["decisions"]
+        decisions = client.get("/decisions", headers=AUTH).json()["decisions"]
         assert len(decisions) == 1
         assert decisions[0]["opus_output"]["action"] == "hold"
         assert decisions[0]["decision_engine"] == "grok"
 
     def test_with_limit(self, client):
-        assert client.get("/decisions?limit=10").status_code == 200
+        assert client.get("/decisions?limit=10", headers=AUTH).status_code == 200
 
 
 class TestPipelineEndpoint:
+    def test_requires_secret(self, client):
+        assert client.get("/pipeline").status_code == 401
+
     def test_returns_full_cycle(self, client):
         import db.dynamo as dyn
         dyn.log_pipeline(
@@ -153,13 +166,13 @@ class TestPipelineEndpoint:
             opus_output={"action": "buy"}, opus_latency_ms=700,
             rg_passed=True, order_submitted=True, alpaca_order_id="o-1",
         )
-        logs = client.get("/pipeline").json()["logs"]
+        logs = client.get("/pipeline", headers=AUTH).json()["logs"]
         assert logs[0]["grok_output"]["sentiment"]["overall"] == 55
         assert logs[0]["grok_latency_ms"] == 120
         assert logs[0]["alpaca_order_id"] == "o-1"
 
     def test_empty(self, client):
-        assert client.get("/pipeline").json()["logs"] == []
+        assert client.get("/pipeline", headers=AUTH).json()["logs"] == []
 
 
 class TestDatabaseError:
@@ -177,25 +190,25 @@ class TestDatabaseError:
         monkeypatch.setattr(app_module, "get_pipeline_logs", boom)
 
     def test_trades_error(self, client, broken_db):
-        body = client.get("/trades").json()
+        body = client.get("/trades", headers=AUTH).json()
         assert body["trades"] == [] and "error" in body
 
     def test_decisions_error(self, client, broken_db):
-        body = client.get("/decisions").json()
+        body = client.get("/decisions", headers=AUTH).json()
         assert body["decisions"] == [] and "error" in body
 
     def test_pipeline_error(self, client, broken_db):
-        body = client.get("/pipeline").json()
+        body = client.get("/pipeline", headers=AUTH).json()
         assert body["logs"] == [] and "error" in body
 
 
 class TestEdgeCases:
     def test_invalid_limit_parameter(self, client):
-        assert client.get("/trades?limit=abc").status_code == 422
+        assert client.get("/trades?limit=abc", headers=AUTH).status_code == 422
 
     @pytest.mark.parametrize("limit", [-10, 0, 1000000])
     def test_out_of_range_limits_are_clamped(self, client, limit):
-        assert client.get(f"/trades?limit={limit}").status_code == 200
+        assert client.get(f"/trades?limit={limit}", headers=AUTH).status_code == 200
 
     def test_nonexistent_endpoint(self, client):
         assert client.get("/nonexistent").status_code == 404
@@ -219,4 +232,4 @@ class TestMultipleRequests:
 
     def test_repeated_status_checks(self, client, mock_trader):
         for _ in range(10):
-            assert client.get("/status").status_code == 200
+            assert client.get("/status", headers=AUTH).status_code == 200

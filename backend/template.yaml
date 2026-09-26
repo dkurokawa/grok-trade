@@ -133,10 +133,9 @@ Resources:
       MemorySize: 256
       FunctionUrlConfig:
         AuthType: NONE
-        Cors:
-          AllowOrigins: ["*"]
-          AllowMethods: ["*"]
-          AllowHeaders: ["*"]
+        # No Cors block: the browser never calls this URL directly. The
+        # dashboard's Next.js server proxies every call and attaches
+        # x-api-key server-side (see app.py's _require_secret).
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref TableName
