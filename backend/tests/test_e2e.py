@@ -413,6 +413,54 @@ class TestErrorRecovery:
         mock_notifier.notify_alert.assert_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_status", ["rejected", "canceled", "expired"])
+    async def test_rejected_order_is_not_recorded_as_a_trade(self, bad_status):
+        """Alpaca accepts the request and returns an Order object even when
+        it rejects/cancels/expires it - trader.execute_order() doesn't raise
+        or return None for this. The pipeline must still treat it as a
+        failure (Discord alert) and must not log it to `trades`."""
+        mock_trader = MagicMock()
+        mock_trader.get_account.return_value = {
+            "cash": 100000.0, "portfolio_value": 100000.0,
+            "buying_power": 200000.0, "equity": 100000.0,
+            "last_equity": 100000.0, "daily_pnl": 0.0,
+        }
+        mock_trader.get_positions.return_value = []
+        mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
+        mock_trader.execute_order.return_value = {
+            "order_id": "order-bad", "status": bad_status,
+        }
+
+        mock_grok = MagicMock()
+        mock_grok.collect_market_report.return_value = (make_mock_grok_report(), 100)
+
+        mock_opus = MagicMock()
+        mock_opus.analyze.return_value = (make_mock_opus_decision(), 800)
+
+        mock_notifier = MagicMock()
+        mock_notifier.notify_alert = AsyncMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline") as mock_log_pipeline, \
+             patch("trading_core.log_trade") as mock_log_trade:
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+            mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
+            mock_guard.max_daily_loss = 500
+
+            from trading_core import trading_cycle
+            await trading_cycle()
+
+        mock_log_trade.assert_not_called()
+        assert mock_log_pipeline.call_args.kwargs["order_submitted"] is False
+        mock_notifier.notify_alert.assert_awaited_once()
+        assert bad_status in mock_notifier.notify_alert.call_args.args[0]
+
+    @pytest.mark.asyncio
     async def test_market_data_unavailable(self):
         """Test handling when market data is unavailable"""
         mock_trader = MagicMock()

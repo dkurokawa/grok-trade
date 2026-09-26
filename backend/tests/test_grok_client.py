@@ -58,6 +58,20 @@ class TestBuildPrompt:
         prompt = client._build_prompt(market_data={}, positions=[])
         assert "significant_change" in prompt
 
+    def test_prompt_defaults_to_no_previous_data(self, client):
+        """Without an explicit previous_sentiment, the prompt must say so
+        rather than silently omit the comparison Grok is asked to make."""
+        prompt = client._build_prompt(market_data={}, positions=[])
+        from grok_client import NO_PREVIOUS_SENTIMENT
+        assert NO_PREVIOUS_SENTIMENT in prompt
+
+    def test_prompt_includes_previous_sentiment_when_given(self, client):
+        prompt = client._build_prompt(
+            market_data={}, positions=[],
+            previous_sentiment="時刻: 2026-01-01T10:00:00 / センチメント: 42 / 重要な変化と判定されたか: False",
+        )
+        assert "センチメント: 42" in prompt
+
     def test_prompt_prohibits_recommendations(self, client):
         """system promptに売買推奨禁止が含まれていることを確認"""
         from grok_client import GROK_SYSTEM
@@ -166,6 +180,24 @@ class TestCollectMarketReport:
         assert report is not None
         assert report["significant_change"] is True
         assert latency >= 0
+
+    def test_collect_forwards_previous_sentiment_to_the_prompt(self, client, mock_market_data):
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "significant_change": False,
+            "sentiment": {"overall": 0, "trending_tickers": [], "notable_signals": []},
+            "breaking_news": [],
+        })
+        client.client.chat.completions.create = MagicMock(return_value=mock_response)
+
+        client.collect_market_report(
+            market_data=mock_market_data, positions=[],
+            previous_sentiment="センチメント: 77",
+        )
+
+        sent_prompt = client.client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+        assert "センチメント: 77" in sent_prompt
 
     def test_collect_api_error(self, client, mock_market_data):
         client.client.chat.completions.create = MagicMock(side_effect=Exception("API Error"))

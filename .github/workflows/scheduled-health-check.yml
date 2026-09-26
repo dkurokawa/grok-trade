@@ -89,6 +89,24 @@ jobs:
             exit 1
           fi
 
+          # trading_cycle() now re-raises after notifying Discord (Issue #9),
+          # instead of swallowing every failure - so a real error surfaces
+          # here as a Lambda Errors metric point, not just silence.
+          ERRORS=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/Lambda \
+            --metric-name Errors \
+            --dimensions Name=FunctionName,Value=grok-trade-trading \
+            --start-time "$(date -u -d '1 hour ago' '+%Y-%m-%dT%H:%M:%SZ')" \
+            --end-time "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+            --period 3600 --statistics Sum \
+            --region "$AWS_REGION" \
+            --query 'Datapoints[0].Sum' --output text)
+          echo "Trading Lambda errors in last hour: $ERRORS"
+          if [ "$ERRORS" != "None" ] && [ -n "$ERRORS" ] && [ "$(printf '%.0f' "$ERRORS")" -gt 0 ]; then
+            echo "❌ Trading Lambda reported $ERRORS error(s) in the last hour"
+            exit 1
+          fi
+
       - name: Notify on failure
         if: failure()
         run: |

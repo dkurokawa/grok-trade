@@ -109,18 +109,33 @@ Resources:
                 - ssm:GetParameters
               Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}*"
       Events:
-        # 9:00-15:30 on the hour and half hour. The old APScheduler setup also
-        # registered a separate 15:30 job, so 15:30 ran twice; this runs it once.
+        # 9:30-15:30, every 30 min - the actual US market session, not
+        # 9:00-15:30 (the market doesn't open until 9:30 ET). Split into two
+        # schedules since a single cron field can't express ":30 on the open
+        # hour, :00 and :30 on every hour after" in one expression.
+        TradingCycleOpen:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(30 9 ? * MON-FRI *)
+            ScheduleExpressionTimezone: America/New_York
+            Input: '{"task": "trading_cycle"}'
         TradingCycle:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: cron(0,30 9-15 ? * MON-FRI *)
+            ScheduleExpression: cron(0,30 10-15 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
             Input: '{"task": "trading_cycle"}'
+        # 9:30-15:55, every 5 min - same reasoning, split for the same reason.
+        EmergencyCheckOpen:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(30,35,40,45,50,55 9 ? * MON-FRI *)
+            ScheduleExpressionTimezone: America/New_York
+            Input: '{"task": "emergency_check"}'
         EmergencyCheck:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: cron(0/5 9-15 ? * MON-FRI *)
+            ScheduleExpression: cron(0/5 10-15 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
             Input: '{"task": "emergency_check"}'
     Metadata:

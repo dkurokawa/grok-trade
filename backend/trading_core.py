@@ -2,8 +2,9 @@
 
 Port of the Grok -> Opus 4.6 -> Risk Guard -> Alpaca pipeline from the old
 APScheduler-driven main.py. EventBridge Scheduler now provides the cadence:
-  - trading_cycle   : every 30 min during market hours (mon-fri 9:00-15:30 ET)
-  - emergency_check : every 5 min during market hours
+  - trading_cycle   : every 30 min, mon-fri 9:30-15:30 ET (the actual market
+                       session; the market doesn't open until 9:30)
+  - emergency_check : every 5 min, mon-fri 9:30-15:55 ET
 
 "Paused" state is persisted in DynamoDB (STATE/scheduler_running) instead of an
 in-process scheduler flag, so it survives across stateless Lambda invocations.
@@ -20,10 +21,10 @@ from datetime import datetime
 import pytz
 
 from config import decision_engine, missing_required
-from db import acquire_lock, get_scheduler_state, log_pipeline, log_trade, set_scheduler_state
+from db import acquire_lock, get_pipeline_logs, get_scheduler_state, log_pipeline, log_trade, set_scheduler_state
 from decision_schema import validate_decision
 from discord_notifier import DiscordNotifier
-from grok_client import GrokClient
+from grok_client import NO_PREVIOUS_SENTIMENT, GrokClient
 from grok_validator import validate_grok_report
 from opus_client import OpusClient
 from risk_guard import RiskGuard
@@ -72,6 +73,37 @@ def _init_clients():
 
 # 監視対象銘柄
 WATCHLIST = ["MSTR", "TSLA", "QQQ", "SPY"]
+
+# Alpaca が「注文は受理したが約定させない」ことを示すステータス。submit_order()
+# 自体は例外を投げず Order オブジェクトを返すので、trader.execute_order() の
+# 戻り値が truthy でも中身がこれらなら実質は失敗として扱う。
+FAILED_ORDER_STATUSES = {"rejected", "canceled", "expired"}
+
+
+def _previous_sentiment_summary() -> str:
+    """直前サイクルの Stage 1 センチメント要約を DynamoDB から引く。
+
+    Grok への API 呼び出しは毎回独立していて前回の会話を覚えていないため、
+    プロンプト内の「前回から大きく変動」判定はこちらから明示的にデータを
+    渡さない限り機能しない（渡さないまま "前回と比較して" と書いていたのが
+    元のバグ）。直前が無ければ、無いと明記した文字列を返す。
+    """
+    try:
+        logs = get_pipeline_logs(1)
+    except Exception as e:  # noqa: BLE001 - この要約が取れなくても取引は続ける
+        print(f"[DB] Could not fetch previous cycle for comparison: {e}")
+        return f"{NO_PREVIOUS_SENTIMENT}（取得エラー: {e}）"
+
+    if not logs or not logs[0].get("grok_output"):
+        return NO_PREVIOUS_SENTIMENT
+
+    prev = logs[0]["grok_output"]
+    sentiment = prev.get("sentiment", {})
+    return (
+        f"時刻: {prev.get('timestamp', '不明')} / "
+        f"センチメント: {sentiment.get('overall', '不明')} / "
+        f"重要な変化と判定されたか: {prev.get('significant_change', '不明')}"
+    )
 
 
 def _ready(job: str) -> bool:
@@ -180,9 +212,12 @@ async def trading_cycle():
             return
 
         # === Stage 1: Grok 情報収集 ===
+        # Grok は前回の呼び出しを覚えていないので、比較材料を明示的に渡す。
+        previous_sentiment = _previous_sentiment_summary()
         grok_report, grok_latency = grok.collect_market_report(
             market_data=market_data,
             positions=positions,
+            previous_sentiment=previous_sentiment,
         )
 
         if not grok_report:
@@ -367,7 +402,7 @@ async def trading_cycle():
             )
             return
 
-        if order:
+        if order and order["status"] not in FAILED_ORDER_STATUSES:
             exec_result = {
                 "alpaca_order_id": order["order_id"],
                 "status": order["status"],
@@ -398,6 +433,20 @@ async def trading_cycle():
                 alpaca_order_id=order["order_id"],
                 execution_result=exec_result,
             )
+        elif order:
+            # Alpaca accepted the request but rejected/canceled/expired the
+            # order itself - not the same as a submit failure (order is None
+            # below), but still not a trade: don't record it in `trades`.
+            print(f"[Order] {symbol} {order['status']}: {order['order_id']}")
+            await notifier.notify_alert(f"Order {order['status']}: {symbol}", "error")
+            log_pipeline(
+                **base,
+                rg_passed=True,
+                rg_adjustments=rg_result.adjustments,
+                order_submitted=False,
+                alpaca_order_id=order["order_id"],
+                execution_result={"status": order["status"]},
+            )
         else:
             print("[Order] Failed to execute")
             await notifier.notify_alert(f"Order failed: {symbol}", "error")
@@ -411,6 +460,12 @@ async def trading_cycle():
     except Exception as e:
         print(f"[Error] Trading cycle failed: {e}")
         await notifier.notify_alert(f"Trading error: {e}", "error")
+        # Re-raise (Issue #9) so the Lambda invocation itself is reported as
+        # failed (CloudWatch Errors metric) instead of a swallowed exception
+        # silently looking like a normal, uneventful run. The slot lock
+        # already claimed above means a retry of this same slot cannot
+        # double-execute.
+        raise
 
 
 async def emergency_check():

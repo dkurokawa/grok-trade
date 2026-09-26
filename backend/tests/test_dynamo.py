@@ -164,3 +164,51 @@ class TestLocks:
 
         item = dyn._get_table().get_item(Key={"pk": "LOCK", "sk": "trading#20260101T0930"})["Item"]
         assert int(item["ttl"]) > _time.time()
+
+
+class TestPreviousSentimentSummary:
+    """trading_core._previous_sentiment_summary() (Issue #11): Grok has no
+    memory across calls, so the prior cycle's sentiment has to be fetched
+    from DynamoDB and handed to it explicitly."""
+
+    def test_no_previous_cycle_says_so(self, dynamo_table):
+        from grok_client import NO_PREVIOUS_SENTIMENT
+        from trading_core import _previous_sentiment_summary
+
+        assert _previous_sentiment_summary() == NO_PREVIOUS_SENTIMENT
+
+    def test_previous_cycle_without_grok_output_says_so(self, dynamo_table):
+        import db.dynamo as dyn
+        from grok_client import NO_PREVIOUS_SENTIMENT
+        from trading_core import _previous_sentiment_summary
+
+        dyn.log_pipeline(cycle_id="c1", opus_skipped=False)  # no grok_output
+        assert _previous_sentiment_summary() == NO_PREVIOUS_SENTIMENT
+
+    def test_previous_cycle_summarised(self, dynamo_table):
+        import db.dynamo as dyn
+        from trading_core import _previous_sentiment_summary
+
+        dyn.log_pipeline(
+            cycle_id="c1",
+            grok_output={
+                "timestamp": "2026-01-01T10:00:00",
+                "significant_change": True,
+                "sentiment": {"overall": 42},
+            },
+        )
+        summary = _previous_sentiment_summary()
+        assert "42" in summary
+        assert "2026-01-01T10:00:00" in summary
+        assert "True" in summary
+
+    def test_read_failure_does_not_raise(self, dynamo_table, monkeypatch):
+        import db.dynamo as dyn
+        from trading_core import _previous_sentiment_summary
+
+        def boom(*a, **kw):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(dyn, "_get_table", boom)
+        summary = _previous_sentiment_summary()
+        assert "前回データなし" in summary

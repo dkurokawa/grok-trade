@@ -39,12 +39,17 @@ GROK_PROMPT_TEMPLATE = """以下のJSON形式で市場状況を報告してく�
 - VIXが急変
 それ以外は false にしてください。
 
+== 前回サイクルのセンチメント（比較用） ==
+{previous_sentiment}
+
 == 現在の市場データ ==
 {market_data}
 
 == 監視銘柄のポジション情報 ==
 {positions}
 """
+
+NO_PREVIOUS_SENTIMENT = "前回データなし"
 
 
 class GrokClient:
@@ -59,14 +64,20 @@ class GrokClient:
         self,
         market_data: dict,
         positions: list[dict],
+        previous_sentiment: str = NO_PREVIOUS_SENTIMENT,
     ) -> tuple[Optional[dict], int]:
         """
         市場情報を収集してMarketReportを返す。判断はしない。
 
+        previous_sentiment: 直前サイクルのセンチメント要約（trading_core が
+        DynamoDB から引いて渡す）。呼び出しごとに独立した API 呼び出しである
+        Grok 自身は前回の会話を覚えていないため、「前回から大きく変動」を
+        判定させるにはこちらから明示的に渡す必要がある。
+
         Returns:
             (report_dict or None, latency_ms)
         """
-        prompt = self._build_prompt(market_data, positions)
+        prompt = self._build_prompt(market_data, positions, previous_sentiment)
 
         start = time.time()
         try:
@@ -137,6 +148,7 @@ class GrokClient:
         self,
         market_data: dict,
         positions: list[dict],
+        previous_sentiment: str = NO_PREVIOUS_SENTIMENT,
     ) -> str:
         market_str = json.dumps(market_data, indent=2)
         positions_str = json.dumps(positions, indent=2) if positions else "None"
@@ -144,6 +156,7 @@ class GrokClient:
         return GROK_PROMPT_TEMPLATE.format(
             market_data=market_str,
             positions=positions_str,
+            previous_sentiment=previous_sentiment,
         )
 
     def _parse_response(self, raw: str) -> Optional[dict]:

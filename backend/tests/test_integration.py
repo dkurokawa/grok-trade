@@ -496,8 +496,10 @@ class TestErrorHandlingIntegration:
     """Test error handling across components"""
 
     @pytest.mark.asyncio
-    async def test_trader_exception_handled_gracefully(self):
-        """Test trader exceptions don't crash the cycle"""
+    async def test_trader_exception_notifies_then_reraises(self):
+        """A mid-cycle exception notifies Discord, then re-raises (Issue #9)
+        so the Lambda invocation is reported as failed (CloudWatch Errors)
+        instead of silently looking like a normal run."""
         mock_trader = MagicMock()
         mock_trader.get_account.side_effect = Exception("API connection failed")
 
@@ -507,13 +509,14 @@ class TestErrorHandlingIntegration:
         with patch("trading_core.trader", mock_trader), \
              patch("trading_core.notifier", mock_notifier):
             from trading_core import trading_cycle
-            await trading_cycle()
+            with pytest.raises(Exception, match="API connection failed"):
+                await trading_cycle()
 
         mock_notifier.notify_alert.assert_called()
 
     @pytest.mark.asyncio
-    async def test_grok_exception_handled_gracefully(self):
-        """Test Grok exceptions don't crash the cycle"""
+    async def test_grok_exception_notifies_then_reraises(self):
+        """Same as above, for a Grok API failure."""
         mock_trader = MagicMock()
         mock_trader.get_account.return_value = {
             "cash": 100000.0, "portfolio_value": 100000.0,
@@ -535,7 +538,8 @@ class TestErrorHandlingIntegration:
              patch("trading_core.guard") as mock_guard:
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             from trading_core import trading_cycle
-            await trading_cycle()
+            with pytest.raises(Exception, match="Grok API error"):
+                await trading_cycle()
 
         mock_notifier.notify_alert.assert_called()
 
