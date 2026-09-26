@@ -1,8 +1,9 @@
 """Trader unit tests - comprehensive edge cases and error handling"""
-import pytest
 import os
-from unittest.mock import patch, MagicMock
 from datetime import datetime
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from trader import DuplicateOrderError, Trader
 
@@ -18,8 +19,8 @@ class TestTraderInit:
             "ALPACA_PAPER": "true"
         }):
             with patch("trader.TradingClient") as mock_trading:
-                with patch("trader.StockHistoricalDataClient") as mock_data:
-                    trader = Trader()
+                with patch("trader.StockHistoricalDataClient"):
+                    Trader()
                     mock_trading.assert_called_once_with("test_key", "test_secret", paper=True)
 
     def test_init_live_trading(self):
@@ -30,8 +31,8 @@ class TestTraderInit:
             "ALPACA_PAPER": "false"
         }):
             with patch("trader.TradingClient") as mock_trading:
-                with patch("trader.StockHistoricalDataClient") as mock_data:
-                    trader = Trader()
+                with patch("trader.StockHistoricalDataClient"):
+                    Trader()
                     mock_trading.assert_called_once_with("test_key", "test_secret", paper=False)
 
     def test_init_default_paper(self):
@@ -41,8 +42,8 @@ class TestTraderInit:
             "ALPACA_SECRET_KEY": "test_secret"
         }, clear=True):
             with patch("trader.TradingClient") as mock_trading:
-                with patch("trader.StockHistoricalDataClient") as mock_data:
-                    trader = Trader()
+                with patch("trader.StockHistoricalDataClient"):
+                    Trader()
                     mock_trading.assert_called_once_with("test_key", "test_secret", paper=True)
 
 

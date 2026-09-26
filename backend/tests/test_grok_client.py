@@ -1,8 +1,9 @@
 """Grok Client unit tests - updated for market report collection (no trading decisions)"""
-import pytest
 import json
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from grok_client import GrokClient
 
@@ -11,7 +12,7 @@ class TestGrokClientInit:
     def test_init_with_api_key(self):
         with patch.dict(os.environ, {"GROK_API_KEY": "test_key"}):
             with patch("grok_client.OpenAI") as mock_openai:
-                client = GrokClient()
+                GrokClient()
                 mock_openai.assert_called_once_with(
                     api_key="test_key",
                     base_url="https://api.x.ai/v1"

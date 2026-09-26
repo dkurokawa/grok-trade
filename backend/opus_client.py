@@ -1,12 +1,10 @@
 """Opus 4.6 クライアント - 最終売買判断エンジン"""
-import os
 import json
+import os
 import re
 import time
-from typing import Optional
 
 import anthropic
-
 
 OPUS_SYSTEM = """あなたはリスク管理を重視するポートフォリオマネージャーです。
 必ずアクションをJSON形式で返してください。
@@ -68,7 +66,7 @@ class OpusClient:
         max_daily_loss: float,
         price_data: dict,
         grok_report: dict,
-    ) -> tuple[Optional[dict], int]:
+    ) -> tuple[dict | None, int]:
         """
         市場データとGrokレポートから売買判断を返す。
 
@@ -124,7 +122,7 @@ class OpusClient:
         )
 
 
-def parse_opus_response(raw: str) -> Optional[dict]:
+def parse_opus_response(raw: str) -> dict | None:
     """Opusの応答からJSONを抽出"""
     # 方法1: ```json ブロック
     match = re.search(r"```json\s*(.*?)\s*```", raw, re.DOTALL)
@@ -151,7 +149,7 @@ REQUIRED_FIELDS = [
 ]
 
 
-def _validate_decision(data: dict) -> Optional[dict]:
+def _validate_decision(data: dict) -> dict | None:
     """判断結果のバリデーションと正規化"""
     for field in REQUIRED_FIELDS:
         if field not in data:

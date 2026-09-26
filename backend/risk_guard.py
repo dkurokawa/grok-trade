@@ -2,13 +2,12 @@
 import math
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
 class RiskCheckResult:
     allowed: bool
-    reason: Optional[str] = None
+    reason: str | None = None
     adjustments: list[dict] = field(default_factory=list)
 
 
@@ -23,8 +22,8 @@ class RiskGuard:
         self,
         decision: dict,
         portfolio: dict,
-        price: Optional[float] = None,
-        equity: Optional[float] = None,
+        price: float | None = None,
+        equity: float | None = None,
     ) -> RiskCheckResult:
         """
         Opus/Grok の判断をルールベースでチェックする唯一の入口。

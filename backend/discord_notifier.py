@@ -1,6 +1,7 @@
 """Discord Webhook通知モジュール - パイプライン全ステージ対応"""
 import os
 from datetime import datetime
+from typing import Any
 
 import httpx
 
@@ -49,7 +50,7 @@ class DiscordNotifier:
 
     async def send_pipeline_log(self, cycle_id: str, stage: str, data: dict):
         """パイプラインの各ステージをDiscordにログ"""
-        embed = {
+        embed: dict[str, Any] = {
             "title": f"Cycle {cycle_id[:8]}",
             "timestamp": datetime.utcnow().isoformat(),
             "fields": [],

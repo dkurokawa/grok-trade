@@ -13,10 +13,11 @@ Schedule: Avoid market open rush hours
 - Avoid: 14:00-15:00 UTC (30 min before/after open)
 - Best times: 16:00-20:00 UTC (mid-session) or 00:00-13:00 UTC (pre-market)
 """
-import pytest
 import os
+from datetime import UTC, datetime
+
 import httpx
-from datetime import datetime, timezone
+import pytest
 
 # Production API URL from environment
 PRODUCTION_URL = os.getenv("PRODUCTION_API_URL", "")
@@ -32,7 +33,7 @@ pytestmark = pytest.mark.skipif(
 
 def is_market_open_rush_hour() -> bool:
     """Check if current time is during market open rush (14:00-15:00 UTC)"""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # Market open rush: 14:00-15:00 UTC (9:00-10:00 AM ET)
     return 14 <= now.hour < 15
 
@@ -174,7 +175,7 @@ class TestProductionAvoidRushHour:
         assert "scheduler_running" in data
 
         # Log current state for monitoring
-        print(f"\n📊 Production Status:")
+        print("\n📊 Production Status:")
         print(f"  Cash: ${data['account'].get('cash', 0):,.2f}")
         print(f"  Portfolio: ${data['account'].get('portfolio_value', 0):,.2f}")
         print(f"  Positions: {len(data['positions'])}")

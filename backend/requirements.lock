@@ -1,0 +1,144 @@
+alpaca-py==0.44.0
+    # via -r requirements.txt
+annotated-doc==0.0.5
+    # via fastapi
+annotated-types==0.8.0
+    # via pydantic
+anthropic==1.8.0
+    # via -r requirements.txt
+anyio==4.15.1
+    # via
+    #   anthropic
+    #   httpx
+    #   httpx2
+    #   openai
+    #   starlette
+boto3==1.43.103
+    # via -r requirements.txt
+botocore==1.43.103
+    # via
+    #   boto3
+    #   s3transfer
+certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
+    #   sentry-sdk
+charset-normalizer==3.5.1
+    # via requests
+click==8.5.0
+    # via uvicorn
+docstring-parser==0.18.0
+    # via anthropic
+fastapi==0.141.1
+    # via
+    #   -r requirements.txt
+    #   sentry-sdk
+h11==0.16.0
+    # via
+    #   httpcore
+    #   httpcore2
+    #   uvicorn
+httpcore==1.0.9
+    # via httpx
+httpcore2==2.13.1
+    # via httpx2
+httpx==0.28.1
+    # via -r requirements.txt
+httpx2==2.13.1
+    # via
+    #   anthropic
+    #   openai
+idna==3.20
+    # via
+    #   anyio
+    #   httpx
+    #   httpx2
+    #   requests
+jiter==0.17.0
+    # via
+    #   anthropic
+    #   openai
+jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
+mangum==0.22.0
+    # via -r requirements.txt
+msgpack==1.2.2
+    # via alpaca-py
+numpy==2.4.6
+    # via pandas
+openai==3.19.2
+    # via -r requirements.txt
+pandas==3.0.6
+    # via
+    #   -r requirements.txt
+    #   alpaca-py
+pydantic==2.13.5
+    # via
+    #   -r requirements.txt
+    #   alpaca-py
+    #   anthropic
+    #   fastapi
+    #   openai
+pydantic-core==2.46.5
+    # via pydantic
+python-dateutil==2.9.0.post0
+    # via
+    #   botocore
+    #   pandas
+python-dotenv==1.2.3
+    # via -r requirements.txt
+pytz==2026.4
+    # via
+    #   -r requirements.txt
+    #   alpaca-py
+requests==2.34.2
+    # via
+    #   -r requirements.txt
+    #   alpaca-py
+s3transfer==0.19.2
+    # via boto3
+sentry-sdk==2.70.0
+    # via -r requirements.txt
+six==1.17.0
+    # via python-dateutil
+sniffio==1.3.1
+    # via
+    #   anthropic
+    #   openai
+sseclient-py==1.9.0
+    # via alpaca-py
+starlette==1.7.0
+    # via fastapi
+truststore==0.10.4
+    # via
+    #   httpcore2
+    #   httpx2
+typing-extensions==4.16.0
+    # via
+    #   anthropic
+    #   anyio
+    #   fastapi
+    #   httpx2
+    #   mangum
+    #   openai
+    #   pydantic
+    #   pydantic-core
+    #   starlette
+    #   typing-inspection
+typing-inspection==0.4.4
+    # via
+    #   fastapi
+    #   pydantic
+urllib3==2.8.0
+    # via
+    #   botocore
+    #   requests
+    #   sentry-sdk
+uvicorn==0.54.0
+    # via -r requirements.txt
+websockets==17.1
+    # via alpaca-py

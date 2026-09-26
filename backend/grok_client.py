@@ -2,7 +2,6 @@
 import json
 import os
 import time
-from typing import Optional
 
 from openai import OpenAI
 
@@ -65,7 +64,7 @@ class GrokClient:
         market_data: dict,
         positions: list[dict],
         previous_sentiment: str = NO_PREVIOUS_SENTIMENT,
-    ) -> tuple[Optional[dict], int]:
+    ) -> tuple[dict | None, int]:
         """
         市場情報を収集してMarketReportを返す。判断はしない。
 
@@ -109,7 +108,7 @@ class GrokClient:
         max_daily_loss: float,
         price_data: dict,
         grok_report: dict,
-    ) -> tuple[Optional[dict], int]:
+    ) -> tuple[dict | None, int]:
         """
         市場データと自身のレポートから売買判断を返す（OpusClient.analyze と同じ契約）。
 
@@ -159,7 +158,7 @@ class GrokClient:
             previous_sentiment=previous_sentiment,
         )
 
-    def _parse_response(self, raw: str) -> Optional[dict]:
+    def _parse_response(self, raw: str) -> dict | None:
         """レスポンスをパースしてMarketReportを返す"""
         try:
             # JSONブロック抽出（```json ... ``` 対応）
@@ -168,7 +167,7 @@ class GrokClient:
                 end = raw.rfind("}") + 1
                 raw = raw[start:end]
 
-            data = json.loads(raw)
+            data: dict = json.loads(raw)
 
             # 必須フィールド検証
             if "significant_change" not in data:

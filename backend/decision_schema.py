@@ -6,7 +6,7 @@ RiskGuard.check() はルールベースの安全弁だが、そもそも AI が�
 すれば、check() 自身の前提が壊れる。ここで弾くのはそのクラスの不正な入力で、
 検証に失敗した判断は例外を投げず hold に倒す（取引はしない）。
 """
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, ValidationInfo, model_validator
 
@@ -15,12 +15,12 @@ class TradeDecision(BaseModel):
     """Stage 2 の判断が満たすべき形。model_validate(data, context=...) で検証する。"""
 
     action: Literal["buy", "sell", "hold"]
-    symbol: Optional[str] = None
+    symbol: str | None = None
     quantity: int = 0
     order_type: Literal["market", "limit"] = "market"
-    limit_price: Optional[float] = None
-    stop_loss: Optional[float] = None
-    take_profit: Optional[float] = None
+    limit_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
     position_size_pct: float = Field(default=0, ge=0, le=100)
     confidence: int = Field(default=0, ge=0, le=100)
     reasoning: str = ""
@@ -86,8 +86,8 @@ def validate_decision(
     decision: dict[str, Any],
     watchlist: list,
     positions: list,
-    current_price: Optional[float],
-) -> tuple[dict, Optional[str]]:
+    current_price: float | None,
+) -> tuple[dict, str | None]:
     """Stage 2 の生の判断を検証する純関数。
 
     Args:

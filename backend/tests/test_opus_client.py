@@ -1,17 +1,18 @@
 """Opus Client unit tests"""
-import pytest
 import json
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from opus_client import OpusClient, parse_opus_response, _validate_decision
+import pytest
+
+from opus_client import OpusClient, _validate_decision, parse_opus_response
 
 
 class TestOpusClientInit:
     def test_init_with_api_key(self):
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test_key"}):
             with patch("opus_client.anthropic.Anthropic") as mock_anthropic:
-                client = OpusClient()
+                OpusClient()
                 mock_anthropic.assert_called_once_with(api_key="test_key")
 
     def test_model_setting(self):
@@ -181,7 +182,7 @@ class TestAnalyze:
     @pytest.fixture
     def client(self):
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test_key"}):
-            with patch("opus_client.anthropic.Anthropic") as mock_cls:
+            with patch("opus_client.anthropic.Anthropic"):
                 c = OpusClient()
                 return c
 

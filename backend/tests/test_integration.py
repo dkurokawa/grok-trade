@@ -1,8 +1,10 @@
 """Integration tests - Component interaction and data flow for 4-stage pipeline"""
-import pytest
 import os
-from unittest.mock import patch, MagicMock, AsyncMock
-from datetime import datetime, date
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 # Set environment before imports
 os.environ["ALPACA_API_KEY"] = "test_key"
 os.environ["ALPACA_SECRET_KEY"] = "test_secret"

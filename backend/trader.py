@@ -1,7 +1,7 @@
 """Trader - Alpaca取引実行モジュール"""
 import os
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any
 
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
@@ -12,6 +12,7 @@ from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
 from alpaca.trading.requests import (
     LimitOrderRequest,
     MarketOrderRequest,
+    OrderRequest,
     StopLossRequest,
     TakeProfitRequest,
 )
@@ -126,11 +127,11 @@ class Trader:
         action: str,
         quantity: int,
         order_type: str = "market",
-        limit_price: Optional[float] = None,
-        stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None,
-        client_order_id: Optional[str] = None,
-    ) -> Optional[dict]:
+        limit_price: float | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        client_order_id: str | None = None,
+    ) -> dict | None:
         """注文実行（stop_loss / take_profit 対応）
 
         client_order_id を渡すと Alpaca 側でも同じ ID の重複発注を拒否させられる
@@ -153,7 +154,10 @@ class Trader:
         # 以前は別々の売り注文として出していたが、同じ株数を2つの売り注文が
         # 取り合うため2つ目が拒否され、親注文が未約定の間は保有株も無い。
         # ブラケット/OTO なら約定後に有効化され、片方が約定すればもう片方は取消される。
-        protective = {}
+        # StopLossRequest / TakeProfitRequest / OrderClass are deliberately
+        # mixed in one dict (unpacked as **protective below), so it's typed
+        # loosely rather than narrowed to whichever key happens to be set first.
+        protective: dict[str, Any] = {}
         if action == "buy":
             if stop_loss:
                 protective["stop_loss"] = StopLossRequest(stop_price=round(float(stop_loss), 2))
@@ -165,6 +169,7 @@ class Trader:
             protective["order_class"] = OrderClass.OTO
 
         try:
+            order_request: OrderRequest
             if order_type == "limit" and limit_price:
                 order_request = LimitOrderRequest(
                     symbol=symbol,
@@ -228,7 +233,7 @@ class Trader:
             print(f"[Trader] Emergency liquidation error: {e}")
         return results
 
-    def get_order_status(self, order_id: str) -> Optional[dict]:
+    def get_order_status(self, order_id: str) -> dict | None:
         """注文ステータス確認"""
         try:
             order = self.trading_client.get_order_by_id(order_id)

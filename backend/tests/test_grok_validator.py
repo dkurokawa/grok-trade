@@ -1,6 +1,5 @@
 """Grok Validator unit tests"""
-import pytest
-from grok_validator import validate_grok_report, VALID_UNIVERSE
+from grok_validator import VALID_UNIVERSE, validate_grok_report
 
 
 class TestValidateGrokReport:

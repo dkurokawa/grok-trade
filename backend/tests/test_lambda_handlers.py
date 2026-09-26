@@ -32,8 +32,9 @@ class TestTaskDispatch:
 
 class TestApiHandler:
     def test_mangum_handler_exists(self, dynamo_table):
-        import app
         from mangum import Mangum
+
+        import app
 
         assert isinstance(app.handler, Mangum)
 
@@ -80,8 +81,9 @@ class TestGuardRails:
             assert trading_core.trader is None
 
     def test_health_reports_missing_secrets(self, dynamo_table, monkeypatch):
-        import app
         from fastapi.testclient import TestClient
+
+        import app
 
         monkeypatch.delenv("ALPACA_API_KEY", raising=False)
         body = TestClient(app.app).get("/health").json()
@@ -90,8 +92,9 @@ class TestGuardRails:
         assert body["secrets"]["ALPACA_API_KEY"] is False  # names only, never values
 
     def test_status_returns_503_when_secrets_missing(self, dynamo_table, monkeypatch):
-        import app
         from fastapi.testclient import TestClient
+
+        import app
 
         monkeypatch.delenv("ALPACA_API_KEY", raising=False)
         r = TestClient(app.app).get("/status", headers={"x-api-key": "test_shared_secret"})

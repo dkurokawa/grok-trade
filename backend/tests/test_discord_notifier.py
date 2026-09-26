@@ -1,8 +1,8 @@
 """Discord Notifier unit tests - pipeline embed + legacy notification tests"""
-import pytest
 import os
-from unittest.mock import patch, MagicMock, AsyncMock
-import httpx
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from discord_notifier import DiscordNotifier
 

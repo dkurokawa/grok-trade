@@ -21,7 +21,7 @@ when DECISION_ENGINE=grok.
 """
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import boto3
@@ -46,7 +46,7 @@ def _new_sort_id() -> str:
     Lexicographic order == chronological order, so a descending Query
     returns newest-first without a secondary index.
     """
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")
     return f"{now}#{uuid.uuid4().hex[:8]}"
 
 
@@ -79,7 +79,7 @@ def _put(pk: str, fields: dict, label: str):
         "pk": pk,
         "sk": sk,
         "id": sk,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         **fields,
     }
     try:
@@ -112,21 +112,21 @@ def log_trade(
 
 def log_pipeline(
     cycle_id: str,
-    decision_engine: str = None,
-    grok_input: dict = None,
-    grok_output: dict = None,
-    grok_latency_ms: int = None,
+    decision_engine: str | None = None,
+    grok_input: dict | None = None,
+    grok_output: dict | None = None,
+    grok_latency_ms: int | None = None,
     opus_skipped: bool = False,
-    opus_input: dict = None,
-    opus_output: dict = None,
-    opus_latency_ms: int = None,
-    opus_adjustments: list = None,
-    rg_passed: bool = None,
-    rg_reason: str = None,
-    rg_adjustments: list = None,
+    opus_input: dict | None = None,
+    opus_output: dict | None = None,
+    opus_latency_ms: int | None = None,
+    opus_adjustments: list | None = None,
+    rg_passed: bool | None = None,
+    rg_reason: str | None = None,
+    rg_adjustments: list | None = None,
     order_submitted: bool = False,
-    alpaca_order_id: str = None,
-    execution_result: dict = None,
+    alpaca_order_id: str | None = None,
+    execution_result: dict | None = None,
 ):
     """1判断サイクル = 1アイテム（旧 pipeline_log テーブル相当）"""
     _put("PIPELINE", {
@@ -233,7 +233,7 @@ def set_scheduler_state(running: bool) -> None:
             "pk": "STATE",
             "sk": "scheduler_running",
             "running": running,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
     )
     print(f"[DB] Scheduler state saved: {running}")
@@ -256,13 +256,13 @@ def acquire_lock(kind: str, slot: str) -> bool:
     the same slot cannot both "win". `ttl` lets DynamoDB expire old locks
     automatically instead of accumulating forever.
     """
-    ttl = int((datetime.now(timezone.utc) + timedelta(days=LOCK_TTL_DAYS)).timestamp())
+    ttl = int((datetime.now(UTC) + timedelta(days=LOCK_TTL_DAYS)).timestamp())
     try:
         _get_table().put_item(
             Item={
                 "pk": "LOCK",
                 "sk": f"{kind}#{slot}",
-                "acquired_at": datetime.now(timezone.utc).isoformat(),
+                "acquired_at": datetime.now(UTC).isoformat(),
                 "ttl": ttl,
             },
             ConditionExpression="attribute_not_exists(pk)",

@@ -7,7 +7,6 @@ shared secret (previously anyone could stop the bot).
 import hmac
 import os
 from datetime import datetime
-from typing import Optional
 
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -69,7 +68,7 @@ app = FastAPI()
 # server-side, so there is no cross-origin browser call to allow.
 
 
-def _require_secret(x_api_key: Optional[str] = Header(default=None)):
+def _require_secret(x_api_key: str | None = Header(default=None)):
     """Guard every endpoint except /health with a shared secret header.
 
     Used as a FastAPI dependency so every mutating *and* read endpoint enforces

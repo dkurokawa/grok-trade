@@ -1,8 +1,9 @@
 """End-to-End tests - Full 4-stage pipeline trading cycle simulation"""
-import pytest
 import os
-from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Set environment before imports
 os.environ["ALPACA_API_KEY"] = "test_key"

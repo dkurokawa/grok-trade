@@ -1,9 +1,10 @@
 """Risk Guard unit tests - comprehensive edge cases including new Opus pipeline checks"""
-import pytest
 import os
 from unittest.mock import patch
 
-from risk_guard import RiskGuard, RiskCheckResult
+import pytest
+
+from risk_guard import RiskCheckResult, RiskGuard
 
 
 class TestRiskCheckResult:
