@@ -99,6 +99,65 @@ class TestGuardRails:
         assert "ALPACA_API_KEY" in r.json()["detail"]
 
 
+class TestEmergencyCheckIndependentOfSchedulerAndAI:
+    """emergency_check() is a drawdown safety net that must not depend on
+    anything trading_cycle() depends on: not the pause flag (it must keep
+    watching while paused), not the AI keys (it never calls Grok/Opus)."""
+
+    def _mock_trader(self, drawdown_pct: float = 10.0):
+        t = MagicMock()
+        t.get_account.return_value = {"equity": 100 - drawdown_pct, "last_equity": 100.0}
+        return t
+
+    def test_liquidates_while_paused(self, dynamo_table):
+        import asyncio
+
+        import db.dynamo as dyn
+        import trading_core
+
+        dyn.set_scheduler_state(False)  # bot is paused
+        mock_trader = self._mock_trader()
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            asyncio.run(trading_core.emergency_check())
+
+        mock_trader.execute_emergency_liquidation.assert_called_once()
+
+    def test_runs_without_ai_keys(self, dynamo_table, monkeypatch):
+        import asyncio
+
+        import trading_core
+
+        monkeypatch.delenv("GROK_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        mock_trader = self._mock_trader()
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier), \
+             patch.object(trading_core, "grok", None), \
+             patch.object(trading_core, "opus", None):
+            asyncio.run(trading_core.emergency_check())
+            mock_trader.execute_emergency_liquidation.assert_called_once()
+            # never touched Grok/Opus, even with the keys missing
+            assert trading_core.grok is None
+            assert trading_core.opus is None
+
+    def test_skips_without_alpaca_keys(self, dynamo_table, monkeypatch):
+        import asyncio
+
+        import trading_core
+
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        with patch.object(trading_core, "trader", None):
+            asyncio.run(trading_core.emergency_check())
+            assert trading_core.trader is None
+
+
 class TestDecisionEngineConfig:
     def test_defaults_to_grok(self, monkeypatch):
         import config

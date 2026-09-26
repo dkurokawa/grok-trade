@@ -13,6 +13,7 @@ Stage 2 is selectable with DECISION_ENGINE:
   - opus : Claude Opus decides from Grok's report (the original design)
 Both return the same TradeDecision shape, so Risk Guard and execution are shared.
 """
+import os
 import uuid
 from datetime import datetime
 
@@ -85,6 +86,31 @@ def _ready(job: str) -> bool:
         return False
 
     _init_clients()
+    return True
+
+
+# Alpaca だけが emergency_check の前提。Grok/Anthropic のキーは無関係。
+_ALPACA_KEYS = ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")
+
+
+def _emergency_ready() -> bool:
+    """emergency_check 専用の準備確認（_ready() は使わない）。
+
+    ドローダウン監視は AI が一切関与しない安全弁 (README の「AI 不要」) なので、
+    停止フラグ（一時停止中でも動かなければ意味がない）も AI キーの有無
+    （Grok/Opus は呼ばない）も見ない。Alpaca のキーだけを確認し、
+    trader/notifier だけを用意する（grok/opus/guard は構築しない）。
+    """
+    missing = [k for k in _ALPACA_KEYS if not os.getenv(k)]
+    if missing:
+        print(f"[Config] Missing secrets in SSM: {', '.join(missing)} - skipping emergency check")
+        return False
+
+    global trader, notifier
+    if trader is None:
+        trader = Trader()
+    if notifier is None:
+        notifier = DiscordNotifier()
     return True
 
 
@@ -388,9 +414,9 @@ async def trading_cycle():
 
 
 async def emergency_check():
-    """5分間隔でドローダウン監視（AI不要）"""
+    """5分間隔でドローダウン監視（AI不要・一時停止中でも動く）"""
     try:
-        if not _ready("emergency check"):
+        if not _emergency_ready():
             return
     except Exception as e:  # noqa: BLE001
         await _alert_startup_failure("Emergency check", e)
