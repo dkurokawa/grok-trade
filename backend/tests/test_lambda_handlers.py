@@ -182,13 +182,14 @@ class TestEmergencyCheckIndependentOfSchedulerAndAI:
 
 
 class TestEmergencyLiquidationFailureHandling:
-    """M1: a failed emergency liquidation must notify Discord with an error,
-    still set the stop flag, and re-raise so the Lambda invocation is
+    """M1/E2: a failed emergency liquidation must notify Discord with an
+    error, still set the stop flag, and re-raise so the Lambda invocation is
     reported as failed (CloudWatch Errors) - never look like a normal run."""
 
     def _mock_trader(self, drawdown_pct: float = 10.0):
         t = MagicMock()
         t.get_account.return_value = {"equity": 100 - drawdown_pct, "last_equity": 100.0}
+        t.get_positions.return_value = [{"symbol": "MSTR", "qty": 10.0, "market_value": 3500.0}]
         return t
 
     def test_per_symbol_failure_notifies_stops_and_raises(self, dynamo_table):
@@ -258,6 +259,214 @@ class TestEmergencyLiquidationFailureHandling:
             asyncio.run(trading_core.emergency_check())  # must not raise
 
         mock_notifier.notify_alert.assert_not_called()
+
+    def test_stop_flag_write_failure_still_raises(self, dynamo_table, monkeypatch):
+        """E2: even if BOTH the liquidation and the stop-flag write fail,
+        EmergencyLiquidationFailed must still be raised at the end (with the
+        stop-flag failure folded into its message) - one failure must not
+        swallow the other."""
+        import asyncio
+
+        import trading_core
+        from trading_core import EmergencyLiquidationFailed
+
+        mock_trader = self._mock_trader()
+        mock_trader.execute_emergency_liquidation.side_effect = RuntimeError("Alpaca API down")
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        def boom(_running):
+            raise RuntimeError("DynamoDB unavailable")
+
+        monkeypatch.setattr(trading_core, "set_scheduler_state", boom)
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            with pytest.raises(EmergencyLiquidationFailed) as exc_info:
+                asyncio.run(trading_core.emergency_check())
+
+        assert "Alpaca API down" in str(exc_info.value)
+        assert "stop flag write failed" in str(exc_info.value)
+        mock_notifier.notify_alert.assert_awaited_once()
+
+    def test_alert_failure_still_raises(self, dynamo_table):
+        """E2: if the failure alert itself can't be sent (Discord down), the
+        exception must still be raised."""
+        import asyncio
+
+        import db.dynamo as dyn
+        import trading_core
+        from trading_core import EmergencyLiquidationFailed
+
+        mock_trader = self._mock_trader()
+        mock_trader.execute_emergency_liquidation.side_effect = RuntimeError("Alpaca API down")
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock(side_effect=RuntimeError("Discord webhook down"))
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            with pytest.raises(EmergencyLiquidationFailed) as exc_info:
+                asyncio.run(trading_core.emergency_check())
+
+        assert "Alpaca API down" in str(exc_info.value)
+        # stop flag is still set even though the alert itself failed
+        assert dyn.get_scheduler_state() is False
+
+    def test_get_account_failure_notifies_and_raises(self, dynamo_table):
+        """E2: a failure in the check itself (not the liquidation path) must
+        also log, notify, and re-raise - not just be swallowed."""
+        import asyncio
+
+        import trading_core
+
+        mock_trader = MagicMock()
+        mock_trader.get_account.side_effect = RuntimeError("Alpaca API down")
+        mock_notifier = MagicMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            with pytest.raises(RuntimeError, match="Alpaca API down"):
+                asyncio.run(trading_core.emergency_check())
+
+        mock_notifier.notify_alert.assert_awaited_once()
+        assert mock_notifier.notify_alert.call_args.args[1] == "error"
+
+    def test_get_account_failure_notify_also_failing_still_raises(self, dynamo_table):
+        """The general-exception path's own notify_alert failing must not
+        swallow the original exception either."""
+        import asyncio
+
+        import trading_core
+
+        mock_trader = MagicMock()
+        mock_trader.get_account.side_effect = RuntimeError("Alpaca API down")
+        mock_notifier = MagicMock()
+        mock_notifier.notify_alert = AsyncMock(side_effect=RuntimeError("Discord webhook down"))
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            with pytest.raises(RuntimeError, match="Alpaca API down"):
+                asyncio.run(trading_core.emergency_check())
+
+
+class TestEmergencyCheckLockFailOpen:
+    """E3: if acquire_lock() itself raises (a DynamoDB problem, not a
+    legitimate "already claimed"), emergency_check must continue anyway - a
+    redundant check is far cheaper than silently skipping the safety net."""
+
+    def test_lock_check_failure_continues_anyway(self, dynamo_table, monkeypatch):
+        import asyncio
+
+        import trading_core
+
+        def boom(_kind, _slot):
+            raise RuntimeError("DynamoDB unavailable")
+
+        monkeypatch.setattr(trading_core, "acquire_lock", boom)
+
+        mock_trader = MagicMock()
+        mock_trader.get_account.return_value = {"equity": 100.0, "last_equity": 100.0}  # no drawdown
+        mock_notifier = MagicMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            asyncio.run(trading_core.emergency_check())  # must not raise, must not skip
+
+        mock_trader.get_account.assert_called_once()
+
+
+class TestEmergencyLiquidationDailyDedup:
+    """E4: at most one emergency liquidation attempt per NY calendar day,
+    and none at all if nothing is held."""
+
+    def _mock_trader(self, drawdown_pct: float = 10.0):
+        t = MagicMock()
+        t.get_account.return_value = {"equity": 100 - drawdown_pct, "last_equity": 100.0}
+        t.get_positions.return_value = [{"symbol": "MSTR", "qty": 10.0, "market_value": 3500.0}]
+        t.execute_emergency_liquidation.return_value = [
+            {"symbol": "MSTR", "status": 200, "ok": True},
+        ]
+        return t
+
+    def test_second_check_same_day_does_not_liquidate_again(self, dynamo_table):
+        import asyncio
+
+        import trading_core
+
+        mock_trader = self._mock_trader()
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier), \
+             patch.object(trading_core, "acquire_lock", return_value=True):
+            asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-01T14:00:00Z"))
+            asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-01T14:05:00Z"))
+
+        mock_trader.execute_emergency_liquidation.assert_called_once()
+
+    def test_next_day_checks_again(self, dynamo_table):
+        import asyncio
+
+        import trading_core
+
+        mock_trader = self._mock_trader()
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier), \
+             patch.object(trading_core, "acquire_lock", return_value=True):
+            asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-01T14:00:00Z"))
+            asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-02T14:00:00Z"))
+
+        assert mock_trader.execute_emergency_liquidation.call_count == 2
+
+    def test_no_positions_held_does_nothing(self, dynamo_table):
+        import asyncio
+
+        import trading_core
+
+        mock_trader = self._mock_trader()
+        mock_trader.get_positions.return_value = []
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            asyncio.run(trading_core.emergency_check())
+
+        mock_trader.execute_emergency_liquidation.assert_not_called()
+        mock_notifier.notify_alert.assert_not_called()
+
+    def test_record_read_failure_fails_open_and_still_liquidates(self, dynamo_table, monkeypatch):
+        """E3/E4: a failure reading today's record must not be read as "skip
+        the safety net" - it should proceed as if not yet recorded."""
+        import asyncio
+
+        import trading_core
+
+        def boom(_date):
+            raise RuntimeError("DynamoDB unavailable")
+
+        monkeypatch.setattr(trading_core, "emergency_liquidation_recorded_for", boom)
+
+        mock_trader = self._mock_trader()
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            asyncio.run(trading_core.emergency_check())
+
+        mock_trader.execute_emergency_liquidation.assert_called_once()
 
 
 class TestDecisionEngineConfig:

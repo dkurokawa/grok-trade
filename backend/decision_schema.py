@@ -64,24 +64,37 @@ class TradeDecision(BaseModel):
             # ため、価格不明を「安全」側ではなく「検証失敗」側に倒す。
             if not current_price or current_price <= 0:
                 raise ValueError("current_price is required to validate a buy's stop_loss/take_profit")
-            if not (self.stop_loss and 0 < self.stop_loss < current_price):
-                raise ValueError(
-                    f"stop_loss must be > 0 and < current price ({current_price}) for buy, "
-                    f"got {self.stop_loss}"
-                )
-            if self.take_profit is not None and self.take_profit <= current_price:
-                raise ValueError(
-                    f"take_profit must be > current price ({current_price}) for buy, "
-                    f"got {self.take_profit}"
-                )
-            if self.order_type == "limit" and self.limit_price is not None:
+
+            limit_price = self.limit_price if self.order_type == "limit" else None
+
+            # limit_price 自体の妥当性 (±10% バンド) を先に見る。バンド外の
+            # limit_price を reference_price に使って stop_loss/take_profit を
+            # 検証しても意味がない（現在値からかけ離れた基準で判定してしまう）。
+            if limit_price is not None:
                 lower_bound = current_price * 0.9
                 upper_bound = current_price * 1.1
-                if not (lower_bound <= self.limit_price <= upper_bound):
+                if not (lower_bound <= limit_price <= upper_bound):
                     raise ValueError(
-                        f"limit_price {self.limit_price} is outside ±10% of "
+                        f"limit_price {limit_price} is outside ±10% of "
                         f"current price ({current_price})"
                     )
+
+            # stop_loss/take_profit の基準は「実際に買うつもりの価格」(E8)。
+            # 指値なら limit_price - 指値90・損切り95は、現在値100を基準にすると
+            # 見逃すが、実際に90で約定したときは損切りの方が高値という矛盾に
+            # なる。成行は現在値がそのまま買うつもりの価格。
+            reference_price = limit_price if limit_price is not None else current_price
+
+            if not (self.stop_loss and 0 < self.stop_loss < reference_price):
+                raise ValueError(
+                    f"stop_loss must be > 0 and < reference price ({reference_price}) for buy, "
+                    f"got {self.stop_loss}"
+                )
+            if self.take_profit is not None and self.take_profit <= reference_price:
+                raise ValueError(
+                    f"take_profit must be > reference price ({reference_price}) for buy, "
+                    f"got {self.take_profit}"
+                )
 
         return self
 

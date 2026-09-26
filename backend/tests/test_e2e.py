@@ -705,6 +705,89 @@ class TestScheduledTimeDrivesTheSlot:
         assert client_order_id == "gt-20260601T0930-MSTR-buy"
 
 
+class TestOpenBuyOrdersFetchFailureSkipsBuy:
+    """E1: if get_open_buy_orders() raises, a buy is skipped (fail closed -
+    the total-position-ratio check and the same-symbol check both depend on
+    it, and neither can be trusted without it). A sell never calls it, so
+    it's unaffected."""
+
+    def _base_mocks(self):
+        mock_trader = MagicMock()
+        mock_trader.get_account.return_value = {
+            "cash": 100000.0, "portfolio_value": 100000.0,
+            "buying_power": 200000.0, "equity": 100000.0,
+            "last_equity": 100000.0, "daily_pnl": 0.0,
+        }
+        mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
+        mock_trader.get_open_buy_orders.side_effect = RuntimeError("Alpaca API down")
+
+        mock_grok = MagicMock()
+        mock_grok.collect_market_report.return_value = (make_mock_grok_report(), 100)
+
+        mock_notifier = MagicMock()
+        mock_notifier.notify_alert = AsyncMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        return mock_trader, mock_grok, mock_notifier
+
+    @pytest.mark.asyncio
+    async def test_buy_is_skipped_with_warning_and_pipeline_log(self):
+        mock_trader, mock_grok, mock_notifier = self._base_mocks()
+        mock_trader.get_positions.return_value = []
+
+        mock_opus = MagicMock()
+        mock_opus.analyze.return_value = (make_mock_opus_decision(action="buy"), 600)
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline") as mock_log_pipeline, \
+             patch("trading_core.log_trade"):
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+            mock_guard.max_daily_loss = 500
+
+            from trading_core import trading_cycle
+            await trading_cycle()
+
+        mock_trader.execute_order.assert_not_called()
+        mock_guard.check.assert_not_called()  # skipped before Risk Guard even runs
+        mock_notifier.notify_alert.assert_awaited_once()
+        assert mock_notifier.notify_alert.call_args.args[1] == "warning"
+        assert "open_buy_orders_unavailable" in mock_log_pipeline.call_args.kwargs["rg_reason"]
+        assert mock_log_pipeline.call_args.kwargs["rg_passed"] is False
+
+    @pytest.mark.asyncio
+    async def test_sell_is_not_affected(self):
+        """A sell decision never calls get_open_buy_orders(), so its failure
+        must not block a sell."""
+        mock_trader, mock_grok, mock_notifier = self._base_mocks()
+        mock_trader.get_positions.return_value = [
+            {"symbol": "MSTR", "qty": 10.0, "market_value": 3500.0}
+        ]
+        mock_trader.execute_order.return_value = {"order_id": "order-1", "status": "filled"}
+
+        mock_opus = MagicMock()
+        mock_opus.analyze.return_value = (make_mock_opus_decision(action="sell", quantity=10), 600)
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"):
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+            mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
+            mock_guard.max_daily_loss = 500
+
+            from trading_core import trading_cycle
+            await trading_cycle()
+
+        mock_trader.execute_order.assert_called_once()
+        mock_trader.get_open_buy_orders.assert_not_called()
+
+
 class TestDecisionValidationInPipeline:
     """decision_schema.validate_decision is wired in ahead of RiskGuard/Alpaca
     (Issue #5): an invalid AI decision must never reach either."""

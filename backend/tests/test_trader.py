@@ -761,10 +761,14 @@ class TestOpenBuyOrders:
 
         assert t.get_open_buy_order_symbols() == {"MSTR"}
 
-    def test_returns_empty_set_on_error(self, order_trader):
+    def test_read_failure_raises_not_returns_empty(self, order_trader):
+        """E1: a failed read must not look like "no open orders" - trading_core
+        treats this exception as a reason to skip the buy (fail closed),
+        which an empty set would silently defeat."""
         t, mock_client = order_trader
         mock_client.get_orders.side_effect = RuntimeError("boom")
-        assert t.get_open_buy_order_symbols() == set()
+        with pytest.raises(RuntimeError, match="boom"):
+            t.get_open_buy_order_symbols()
 
 
 class TestGetOpenBuyOrders:
@@ -803,10 +807,14 @@ class TestGetOpenBuyOrders:
 
         assert t.get_open_buy_orders() == [{"symbol": "QQQ", "qty": 3.0, "limit_price": None}]
 
-    def test_returns_empty_list_on_error(self, order_trader):
+    def test_read_failure_raises_not_returns_empty(self, order_trader):
+        """E1: a failed read must raise, not silently report "no open buy
+        orders" - the total-position-ratio check would otherwise go through
+        with a false sense of how much is already committed."""
         t, mock_client = order_trader
         mock_client.get_orders.side_effect = RuntimeError("boom")
-        assert t.get_open_buy_orders() == []
+        with pytest.raises(RuntimeError, match="boom"):
+            t.get_open_buy_orders()
 
 
 class TestEmergencyLiquidation:
@@ -872,8 +880,10 @@ class TestEmergencyLiquidation:
 
 
 class TestClientOrderIdDedup:
-    """client_order_id lets Alpaca itself reject a duplicate order - the
-    second line of defense behind trading_core's DynamoDB slot lock."""
+    """execute_order() checks get_order_by_client_id() before submitting
+    (E5) - the second line of defense behind trading_core's DynamoDB slot
+    lock. Exception-message string-matching on submit_order() failures was
+    removed; duplicate detection now happens explicitly beforehand."""
 
     @pytest.fixture
     def trader(self):
@@ -884,31 +894,89 @@ class TestClientOrderIdDedup:
     def _request(self, mock_client):
         return mock_client.submit_order.call_args[0][0]
 
+    def _not_found(self):
+        """Simulates Alpaca's 404 (no order with this client_order_id yet)."""
+        from alpaca.common.exceptions import APIError
+
+        http_error = MagicMock()
+        http_error.response.status_code = 404
+        return APIError('{"code": 40410000, "message": "order not found"}', http_error)
+
+    def _mock_order(self, symbol="MSTR", side="buy"):
+        order = MagicMock()
+        order.id, order.symbol = "order-1", symbol
+        order.side.value, order.qty, order.type.value = side, "7", "market"
+        order.status.value, order.submitted_at = "accepted", datetime.now()
+        return order
+
     def test_client_order_id_is_sent_on_the_request(self, trader):
         t, mock_client = trader
-        order = MagicMock()
-        order.id, order.symbol = "order-1", "MSTR"
-        order.side.value, order.qty, order.type.value = "buy", "7", "market"
-        order.status.value, order.submitted_at = "accepted", datetime.now()
-        mock_client.submit_order.return_value = order
+        mock_client.get_order_by_client_id.side_effect = self._not_found()
+        mock_client.submit_order.return_value = self._mock_order()
 
         t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
 
         assert self._request(mock_client).client_order_id == "gt-20260101T0930-MSTR-buy"
+        mock_client.get_order_by_client_id.assert_called_once_with("gt-20260101T0930-MSTR-buy")
 
-    def test_duplicate_client_order_id_raises_not_returns_none(self, trader):
+    def test_existing_order_raises_duplicate_not_returns_none(self, trader):
+        """既存あり → 発注しない (E5)。"""
         t, mock_client = trader
-        mock_client.submit_order.side_effect = Exception(
-            "client_order_id must be unique - an order with this client_order_id already exists"
-        )
+        existing = MagicMock()
+        existing.id = "order-existing"
+        mock_client.get_order_by_client_id.return_value = existing
 
         with pytest.raises(DuplicateOrderError):
             t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
 
-    def test_unrelated_error_still_returns_none(self, trader):
-        """Only a duplicate client_order_id should raise; every other submit
-        failure keeps the existing "return None" contract."""
+        mock_client.submit_order.assert_not_called()
+
+    def test_not_found_proceeds_to_submit(self, trader):
+        """404 → 発注 (E5)。"""
         t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = self._not_found()
+        mock_client.submit_order.return_value = self._mock_order()
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert result is not None
+        mock_client.submit_order.assert_called_once()
+
+    def test_confirmation_failure_skips_buy(self, trader):
+        """確認自体が失敗（404以外） → 買いは発注しない (E5, E1と同じ fail closed)。"""
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = RuntimeError("Alpaca API down")
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert result is None
+        mock_client.submit_order.assert_not_called()
+
+    def test_confirmation_failure_does_not_block_sell(self, trader):
+        """同じ確認失敗でも売りは止めない (E5, fail open for exits)。"""
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = RuntimeError("Alpaca API down")
+        mock_client.submit_order.return_value = self._mock_order(side="sell")
+
+        result = t.execute_order("MSTR", "sell", 7, client_order_id="gt-20260101T0930-MSTR-sell")
+
+        assert result is not None
+        mock_client.submit_order.assert_called_once()
+
+    def test_no_client_order_id_skips_the_check(self, trader):
+        t, mock_client = trader
+        mock_client.submit_order.return_value = self._mock_order()
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id=None)
+
+        assert result is not None
+        mock_client.get_order_by_client_id.assert_not_called()
+
+    def test_unrelated_submit_error_still_returns_none(self, trader):
+        """duplicate 検知を通過したあと、submit_order 自体が失敗した場合は
+        従来どおり None を返す。"""
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = self._not_found()
         mock_client.submit_order.side_effect = Exception("insufficient buying power")
 
         result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")

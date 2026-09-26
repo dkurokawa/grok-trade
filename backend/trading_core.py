@@ -22,7 +22,16 @@ from typing import Any
 import pytz
 
 from config import decision_engine, missing_required
-from db import acquire_lock, get_pipeline_logs, get_scheduler_state, log_pipeline, log_trade, set_scheduler_state
+from db import (
+    acquire_lock,
+    emergency_liquidation_recorded_for,
+    get_pipeline_logs,
+    get_scheduler_state,
+    log_pipeline,
+    log_trade,
+    record_emergency_liquidation,
+    set_scheduler_state,
+)
 from decision_schema import validate_decision
 from discord_notifier import DiscordNotifier
 from grok_client import NO_PREVIOUS_SENTIMENT, GrokClient
@@ -345,12 +354,30 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
         symbol = decision.get("symbol")
         price = market_data.get(symbol, {}).get("price", 0) if symbol else 0
 
-        # 未約定の買い注文の想定額（total position ratio に含める。M2）。
-        # 複数サイクルにまたがって未約定の買い注文を積み増すことで総ポジション
-        # 上限をすり抜けられないようにする。buy 判断のときだけ取得する。
+        # 未約定の買い注文一覧を1回だけ取得する（total position ratio の
+        # 想定額 = M2、同一銘柄チェック = Stage 4 の両方で使う）。
+        # buy 判断のときだけ取得する。取得失敗は E1: fail closed - 既存の
+        # exposure が分からない以上、新規の買いは見送る（売りはこの一覧を
+        # 使わないので影響しない）。
         open_buy_order_value = 0.0
+        open_buy_order_symbols: set = set()
         if decision["action"] == "buy":
-            for o in _trader.get_open_buy_orders():
+            try:
+                open_buy_orders = _trader.get_open_buy_orders()
+            except Exception as e:
+                reason = f"open_buy_orders_unavailable: {e}"
+                print(f"[Execute] Skipping buy - could not check open buy orders: {e}")
+                try:
+                    await _notifier.notify_alert(
+                        f"Skipped buy: could not check open orders ({e})", "warning"
+                    )
+                except Exception as notify_err:
+                    print(f"[Discord] Warning failed: {notify_err}")
+                log_pipeline(**base, rg_passed=False, rg_reason=reason)
+                return
+
+            open_buy_order_symbols = {o["symbol"] for o in open_buy_orders}
+            for o in open_buy_orders:
                 order_price = o["limit_price"] or market_data.get(o["symbol"], {}).get("price", 0)
                 open_buy_order_value += o["qty"] * order_price
 
@@ -416,7 +443,10 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
             effective_price = effective_buy_price(
                 price, decision.get("order_type", "market"), decision.get("limit_price")
             )
-            if symbol in _trader.get_open_buy_order_symbols():
+            # open_buy_order_symbols was already fetched above (Stage 3) - a
+            # failure there already returned before reaching here, so this is
+            # always the real, current set for a buy decision.
+            if symbol in open_buy_order_symbols:
                 skip_reason = "open_buy_order_pending"
             elif effective_price and decision["quantity"] * effective_price > buying_power:
                 skip_reason = (
@@ -547,8 +577,18 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
         await _alert_startup_failure("Emergency check", e)
         return
 
-    slot = _slot_id(5, _resolve_now(scheduled_time))
-    if not acquire_lock("emergency", slot):
+    now = _resolve_now(scheduled_time)
+    slot = _slot_id(5, now)
+    try:
+        lock_acquired = acquire_lock("emergency", slot)
+    except Exception as e:  # noqa: BLE001
+        # E3: a lock-check failure must not block the drawdown check itself -
+        # a redundant emergency check (worst case: two liquidation attempts
+        # a few seconds apart, the second a no-op) is far cheaper than
+        # silently skipping the safety net because DynamoDB hiccuped.
+        print(f"[Lock] Could not check emergency lock for slot {slot}: {e} - continuing anyway (fail open)")
+        lock_acquired = True
+    if not lock_acquired:
         print(f"[Lock] Emergency check for slot {slot} already handled - skipping")
         return
 
@@ -565,6 +605,30 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
         if last_equity > 0:
             drawdown_pct = ((last_equity - equity) / last_equity) * 100
             if drawdown_pct > 5:
+                # E4: at most one liquidation attempt per NY calendar day -
+                # repeating a failed one every 5 minutes for the rest of the
+                # session would just spam the same failure without helping.
+                today = now.astimezone(NY_TZ).strftime("%Y-%m-%d")
+                try:
+                    already_handled_today = emergency_liquidation_recorded_for(today)
+                except Exception as e:  # noqa: BLE001
+                    # Same fail-open policy as the lock check (E3): a read
+                    # failure must not be read as "skip the safety net".
+                    print(f"[DB] Could not check emergency liquidation record for {today}: "
+                          f"{e} - continuing anyway (fail open)")
+                    already_handled_today = False
+
+                if already_handled_today:
+                    print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5%, but an emergency "
+                          f"liquidation was already recorded for {today} - skipping (log only)")
+                    return
+
+                positions = _trader.get_positions()
+                if not positions:
+                    print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5%, but nothing is "
+                          f"held - nothing to liquidate")
+                    return
+
                 print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5% → liquidating")
 
                 liquidation_error: Exception | None = None
@@ -575,6 +639,17 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
                     liquidation_error = e
 
                 failed = [r for r in results if not r.get("ok", True)]
+                extra_failures: list[str] = []
+
+                # 実行した以上、成否に関わらず今日の分として記録する（E4）。
+                # 失敗した清算を5分おきに何度も再試行しても状況は変わらない
+                # ことが多く、その都度アラートを出すのはノイズになるだけ。
+                try:
+                    record_emergency_liquidation(today)
+                except Exception as e:
+                    print(f"[DB] Failed to record emergency liquidation for {today}: {e}")
+                    extra_failures.append(f"liquidation record write failed: {e}")
+
                 reason = f"EMERGENCY STOP: drawdown {drawdown_pct:.1f}%"
                 if liquidation_error or failed:
                     reason += " - LIQUIDATION FAILED, see error alert"
@@ -586,11 +661,18 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
                     })
                 except Exception as e:
                     print(f"[Discord] Emergency log failed: {e}")
+                    extra_failures.append(f"pipeline log failed: {e}")
 
                 # ドローダウンを検知した以上、清算の成否に関わらず以降の
                 # 自動取引は止める（部分的にしか清算できていない状態で
-                # 取引を再開するのが最悪のシナリオ）。
-                set_scheduler_state(False)
+                # 取引を再開するのが最悪のシナリオ）。書き込み自体が失敗しても
+                # （E2）先へ進み、最後にまとめて例外を送出する - どちらかの
+                # 失敗で止まって清算失敗の報告自体が消えるのを避ける。
+                try:
+                    set_scheduler_state(False)
+                except Exception as e:
+                    print(f"[DB] Failed to persist stop flag: {e}")
+                    extra_failures.append(f"stop flag write failed: {e}")
 
                 if liquidation_error or failed:
                     if liquidation_error:
@@ -599,10 +681,26 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
                         detail = "; ".join(
                             f"{r['symbol']}: {r.get('error', r['status'])}" for r in failed
                         )
+                    if extra_failures:
+                        detail += " | also: " + "; ".join(extra_failures)
+
                     print(f"[EMERGENCY] Liquidation failed: {detail}")
-                    await _notifier.notify_alert(f"Emergency liquidation failed: {detail}", "error")
+                    try:
+                        await _notifier.notify_alert(f"Emergency liquidation failed: {detail}", "error")
+                    except Exception as e:
+                        print(f"[Discord] Failure alert failed: {e}")
+                        detail += f" | also: alert failed: {e}"
+                    # 清算失敗・停止フラグ書き込み失敗・通知失敗のどれが
+                    # 起きても、最後に必ずこれを送出する（E2）。
                     raise EmergencyLiquidationFailed(detail)
     except EmergencyLiquidationFailed:
         raise
     except Exception as e:
+        # get_account() などここまでの処理自体が失敗したケース。ログ・通知の
+        # うえで再送出し、Lambda の Errors メトリクスに載せる（E2）。
         print(f"[Emergency] Check failed: {e}")
+        try:
+            await _notifier.notify_alert(f"Emergency check failed: {e}", "error")
+        except Exception as notify_err:
+            print(f"[Discord] Failure alert failed: {notify_err}")
+        raise

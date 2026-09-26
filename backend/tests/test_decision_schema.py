@@ -90,7 +90,12 @@ class TestBuyLimitPriceBand:
     """
 
     def _buy_at_100(self, **overrides):
-        return _buy(stop_loss=90.0, take_profit=120.0, **overrides)
+        # stop_loss/take_profit are deliberately far from every limit_price
+        # used in this class's tests (90-500), since E8 now checks them
+        # against limit_price (not current_price) for a limit order - these
+        # tests are about the ±10% band itself, not the stop_loss/take_profit
+        # reference price (see TestStopLossReferencePrice for that).
+        return _buy(stop_loss=50.0, take_profit=None, **overrides)
 
     def test_within_10pct_above_passes(self):
         decision, reason = validate_decision(
@@ -157,6 +162,57 @@ class TestBuyLimitPriceBand:
         )
         assert reason is None
         assert decision["action"] == "sell"
+
+
+class TestStopLossReferencePrice:
+    """buy の stop_loss/take_profit の基準価格は、limit なら limit_price、
+    market なら現在値にする (E8)。指値で「実際に買うつもりの価格」より下に
+    損切りを置いていない判断は、現在値基準では見逃されてしまう。"""
+
+    def test_stop_loss_above_limit_price_forces_hold(self):
+        """現在値 100・指値 90・損切り 95 のケース: 95 は現在値(100)より低いが
+        指値(90)より高い - 90 で約定すればすぐに損切りより高値で買った矛盾に
+        なる。"""
+        decision, reason = validate_decision(
+            _buy(order_type="limit", limit_price=90.0, stop_loss=95.0, take_profit=None),
+            WATCHLIST, [], current_price=100.0,
+        )
+        assert decision["action"] == "hold"
+        assert "reference price" in reason
+
+    def test_stop_loss_below_limit_price_passes(self):
+        decision, reason = validate_decision(
+            _buy(order_type="limit", limit_price=90.0, stop_loss=85.0, take_profit=None),
+            WATCHLIST, [], current_price=100.0,
+        )
+        assert reason is None
+        assert decision["action"] == "buy"
+
+    def test_take_profit_below_limit_price_forces_hold(self):
+        """指値 90 に対して利確 92 は妥当だが、利確 88（指値より低い）は矛盾。"""
+        decision, reason = validate_decision(
+            _buy(order_type="limit", limit_price=90.0, stop_loss=85.0, take_profit=88.0),
+            WATCHLIST, [], current_price=100.0,
+        )
+        assert decision["action"] == "hold"
+        assert "reference price" in reason
+
+    def test_take_profit_above_limit_price_passes(self):
+        decision, reason = validate_decision(
+            _buy(order_type="limit", limit_price=90.0, stop_loss=85.0, take_profit=92.0),
+            WATCHLIST, [], current_price=100.0,
+        )
+        assert reason is None
+        assert decision["action"] == "buy"
+
+    def test_market_order_still_uses_current_price(self):
+        """成行なら基準は現在値のまま（E8 は指値のときだけ変える）。"""
+        decision, reason = validate_decision(
+            _buy(order_type="market", limit_price=None, stop_loss=95.0, take_profit=None),
+            WATCHLIST, [], current_price=100.0,
+        )
+        assert reason is None
+        assert decision["action"] == "buy"
 
 
 class TestSymbolRules:

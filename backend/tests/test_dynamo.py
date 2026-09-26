@@ -212,3 +212,33 @@ class TestPreviousSentimentSummary:
         monkeypatch.setattr(dyn, "_get_table", boom)
         summary = _previous_sentiment_summary()
         assert "前回データなし" in summary
+
+
+class TestEmergencyLiquidationRecord:
+    """emergency_liquidation_recorded_for()/record_emergency_liquidation()
+    (E4): STATE/emergency#<date> marks a day as already having had a
+    liquidation attempt."""
+
+    def test_not_recorded_by_default(self, dyn):
+        assert dyn.emergency_liquidation_recorded_for("2026-06-01") is False
+
+    def test_recorded_after_write(self, dyn):
+        dyn.record_emergency_liquidation("2026-06-01")
+        assert dyn.emergency_liquidation_recorded_for("2026-06-01") is True
+
+    def test_different_dates_are_independent(self, dyn):
+        dyn.record_emergency_liquidation("2026-06-01")
+        assert dyn.emergency_liquidation_recorded_for("2026-06-02") is False
+
+    def test_read_failure_fails_open_returns_false(self, dyn, monkeypatch):
+        broken_table = MagicMock()
+        broken_table.get_item.side_effect = RuntimeError("boom")
+        monkeypatch.setattr(dyn, "_get_table", lambda: broken_table)
+        assert dyn.emergency_liquidation_recorded_for("2026-06-01") is False
+
+    def test_write_failure_raises(self, dyn, monkeypatch):
+        broken_table = MagicMock()
+        broken_table.put_item.side_effect = RuntimeError("boom")
+        monkeypatch.setattr(dyn, "_get_table", lambda: broken_table)
+        with pytest.raises(RuntimeError):
+            dyn.record_emergency_liquidation("2026-06-01")

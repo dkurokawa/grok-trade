@@ -3,6 +3,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Any
 
+from alpaca.common.exceptions import APIError
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
@@ -70,28 +71,31 @@ class Trader:
         しれない未約定の買い注文の想定額も新規発注と同様に「これから保有する
         ことになりうる額」として含める必要がある - でないと、複数サイクルに
         またがって未約定の買い注文を積み増すことで上限をすり抜けられてしまう。
+
+        取得失敗は例外として送出する（E1: fail closed）。以前はここで握り潰して
+        空リストを返していたが、それだと「未約定注文は無い」という偽の答えに
+        なり、総ポジション上限チェックが実質素通しになってしまっていた。
+        呼び出し元 (trading_core) はこの例外を「新規の買いを見送る理由」として
+        扱う。売りはこの一覧を使わないので影響しない。
         """
-        try:
-            orders = self.trading_client.get_orders()
-            assert not isinstance(orders, dict)  # see get_account()
-            return [
-                {
-                    "symbol": o.symbol,
-                    "qty": float(o.qty) if o.qty else 0.0,
-                    "limit_price": float(o.limit_price) if o.limit_price else None,
-                }
-                for o in orders if o.side == OrderSide.BUY
-            ]
-        except Exception as e:
-            print(f"[Trader] Open buy orders error: {e}")
-            return []
+        orders = self.trading_client.get_orders()
+        assert not isinstance(orders, dict)  # see get_account()
+        return [
+            {
+                "symbol": o.symbol,
+                "qty": float(o.qty) if o.qty else 0.0,
+                "limit_price": float(o.limit_price) if o.limit_price else None,
+            }
+            for o in orders if o.side == OrderSide.BUY
+        ]
 
     def get_open_buy_order_symbols(self) -> set:
         """未約定の「買い」注文が出ている銘柄。
 
         閉場中の注文は約定するまで買付余力を押さえ続けるため、同じ銘柄に重ねて
         発注しても Alpaca に弾かれるだけになる。ブラケット注文の損切り・利確は
-        売り注文として残り続けるので、買いだけを対象にする。
+        売り注文として残り続けるので、買いだけを対象にする。取得失敗は
+        get_open_buy_orders() と同様に例外を送出する。
         """
         return {o["symbol"] for o in self.get_open_buy_orders()}
 
@@ -160,11 +164,17 @@ class Trader:
     ) -> dict | None:
         """注文実行（stop_loss / take_profit 対応）
 
-        client_order_id を渡すと Alpaca 側でも同じ ID の重複発注を拒否させられる
-        （二重発注対策の二段目。一段目は trading_core の DynamoDB ロック）。
-        重複を検知したら None を返さず DuplicateOrderError を送出する。
-        None は「発注失敗」として trading_core が失敗通知を出すが、重複は
-        失敗ではない（既に発注済みという意味）ため区別する。
+        client_order_id を渡すと、発注前に get_order_by_client_id() で同じ ID の
+        注文が既に存在しないか確認する（二重発注対策の二段目。一段目は
+        trading_core の DynamoDB ロック）。既存の注文が見つかったら None を
+        返さず DuplicateOrderError を送出する - None は「発注失敗」として
+        trading_core が失敗通知を出すが、重複は失敗ではない（既に発注済み
+        という意味）ため区別する。
+
+        確認自体（get_order_by_client_id 呼び出し）が 404 以外の理由で失敗
+        したら、buy は発注しない（E5・E1 と同じ fail closed: 重複かどうか
+        分からない新規の買いは見送る）。sell はそのまま発注する（保有解消は
+        fail open: 確認できないからといって手仕舞いを止めない）。
         """
         if action not in ["buy", "sell"]:
             print(f"[Trader] Invalid action: {action}")
@@ -173,6 +183,26 @@ class Trader:
         if quantity <= 0:
             print(f"[Trader] Invalid quantity: {quantity}")
             return None
+
+        if client_order_id:
+            try:
+                existing = self.trading_client.get_order_by_client_id(client_order_id)
+            except Exception as e:
+                not_found = isinstance(e, APIError) and e.status_code == 404
+                if not not_found:
+                    if action == "buy":
+                        print(f"[Trader] Could not confirm duplicate for buy {symbol} "
+                              f"(client_order_id={client_order_id}): {e} - skipping buy")
+                        return None
+                    print(f"[Trader] Could not confirm duplicate for sell {symbol} "
+                          f"(client_order_id={client_order_id}): {e} - proceeding anyway")
+                # 404 (not_found): 既存注文なし、通常どおり発注へ進む。
+            else:
+                assert not isinstance(existing, dict)  # see get_account()
+                raise DuplicateOrderError(
+                    f"Order for {symbol} already submitted (client_order_id={client_order_id}, "
+                    f"existing order_id={existing.id})"
+                )
 
         side = OrderSide.BUY if action == "buy" else OrderSide.SELL
 
@@ -240,13 +270,6 @@ class Trader:
             return result
 
         except Exception as e:
-            message = str(e).lower()
-            if client_order_id and "client_order_id" in message and (
-                "already" in message or "duplicate" in message or "exists" in message
-            ):
-                raise DuplicateOrderError(
-                    f"Order for {symbol} already submitted (client_order_id={client_order_id})"
-                ) from e
             print(f"[Trader] Order error: {e}")
             return None
 

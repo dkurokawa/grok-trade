@@ -220,6 +220,38 @@ def get_scheduler_state() -> bool:
     return True  # no item yet: default to running
 
 
+def emergency_liquidation_recorded_for(date: str) -> bool:
+    """Whether an emergency liquidation was already attempted on this NY
+    calendar date (STATE/emergency#<date>, `date` = "YYYY-MM-DD").
+
+    A read failure returns False - fail open (E3/E4): emergency liquidation
+    is a safety net, and skipping it because we can't confirm today's record
+    is more dangerous than a redundant liquidation attempt.
+    """
+    try:
+        resp = _get_table().get_item(Key={"pk": "STATE", "sk": f"emergency#{date}"})
+    except Exception as e:  # noqa: BLE001
+        print(f"[DB] Error checking emergency liquidation record for {date}: {e} - treating as not recorded")
+        return False
+    return resp.get("Item") is not None
+
+
+def record_emergency_liquidation(date: str) -> None:
+    """Mark this NY calendar date (`date` = "YYYY-MM-DD") as having had an
+    emergency liquidation attempt, so the 5-min drawdown check doesn't
+    re-trigger it (and re-notify) for the rest of the day. Raises on failure
+    rather than swallowing it, like set_scheduler_state() - the caller
+    decides how to handle a write failure here.
+    """
+    _get_table().put_item(
+        Item={
+            "pk": "STATE",
+            "sk": f"emergency#{date}",
+            "recorded_at": datetime.now(UTC).isoformat(),
+        }
+    )
+
+
 def set_scheduler_state(running: bool) -> None:
     """Raises on failure rather than swallowing it.
 
