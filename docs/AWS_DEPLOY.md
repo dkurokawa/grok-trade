@@ -188,7 +188,9 @@ aws lambda invoke --function-name grok-trade-trading \
   --payload '{"task": "emergency_check"}' /dev/stdout
 ```
 
-停止フラグが立っていると、どちらも何もせずに終了する。
+停止フラグが立っていると `trading_cycle` は何もせずに終了する。`emergency_check` は
+停止フラグを見ない（一時停止中でもドローダウン監視・清算は動く。AI キーの有無も見ない。
+Alpaca のキーがあれば動く）。
 
 ### 緊急停止 / 再開
 
