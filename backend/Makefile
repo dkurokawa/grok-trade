@@ -17,7 +17,7 @@ LAMBDA_PIP_FLAGS = \
 # Application modules shipped to Lambda (tests and local-only files excluded).
 APP_FILES = app.py lambda_trading.py trading_core.py config.py \
             grok_client.py opus_client.py grok_validator.py skip_logic.py \
-            trader.py risk_guard.py discord_notifier.py
+            trader.py risk_guard.py discord_notifier.py decision_schema.py
 
 define build_function
 	$(PIP) install -r requirements.txt $(LAMBDA_PIP_FLAGS) --target "$(ARTIFACTS_DIR)"

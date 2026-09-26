@@ -20,6 +20,7 @@ import pytz
 
 from config import decision_engine, missing_required
 from db import acquire_lock, get_scheduler_state, log_pipeline, log_trade, set_scheduler_state
+from decision_schema import validate_decision
 from discord_notifier import DiscordNotifier
 from grok_client import GrokClient
 from grok_validator import validate_grok_report
@@ -207,6 +208,22 @@ async def trading_cycle():
             log_pipeline(**base, opus_latency_ms=decision_latency)
             return
 
+        # === Stage 2.5: AI 出力の検証 ===
+        # RiskGuard.check() はここまでの前提（存在するティッカー、実際に保有して
+        # いる銘柄、現在値を踏まえた損切り価格）が正しいことを仮定して動く。
+        # AI がそれを満たさない判断を返したら、RiskGuard に渡す前に hold へ倒す。
+        validation_symbol = decision.get("symbol")
+        validation_price = (
+            market_data.get(validation_symbol, {}).get("price") if validation_symbol else None
+        )
+        decision, invalid_reason = validate_decision(decision, WATCHLIST, positions, validation_price)
+        if invalid_reason:
+            print(f"[Validate] Decision failed validation, forcing hold: {invalid_reason}")
+            try:
+                await notifier.notify_alert(f"Decision validation failed: {invalid_reason}", "warning")
+            except Exception as e:
+                print(f"[Discord] Validation warning failed: {e}")
+
         decision["decision_engine"] = engine
         try:
             await notifier.send_pipeline_log(cycle_id, "opus_decision", decision)
@@ -268,7 +285,7 @@ async def trading_cycle():
             log_pipeline(
                 **base,
                 rg_passed=True,
-                rg_reason="hold",
+                rg_reason=f"invalid_decision: {invalid_reason}" if invalid_reason else "hold",
                 rg_adjustments=rg_result.adjustments,
             )
             return

@@ -452,7 +452,13 @@ class TestMultipleCycles:
             "buying_power": 200000.0, "equity": 100000.0,
             "last_equity": 100000.0, "daily_pnl": 0.0,
         }
-        mock_trader.get_positions.return_value = []
+        # A held MSTR position is present throughout (a real Alpaca account
+        # would only reflect the buy after cycle 1, but this mock doesn't
+        # model that state transition) so the cycle-3 sell passes
+        # decision_schema's "symbol must be held" / "quantity <= held" checks.
+        mock_trader.get_positions.return_value = [
+            {"symbol": "MSTR", "qty": 10.0, "market_value": 3500.0}
+        ]
         mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
         mock_trader.execute_order.return_value = {
             "order_id": "order-1", "status": "filled",
@@ -597,6 +603,60 @@ class TestDuplicateSlotLock:
         mock_notifier.notify_alert.assert_not_called()
         assert mock_log_pipeline.call_args.kwargs["order_submitted"] is False
         assert mock_log_pipeline.call_args.kwargs["execution_result"] == {"skipped": "duplicate_order"}
+
+
+class TestDecisionValidationInPipeline:
+    """decision_schema.validate_decision is wired in ahead of RiskGuard/Alpaca
+    (Issue #5): an invalid AI decision must never reach either."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_decision_forces_hold_and_warns(self):
+        mock_trader = MagicMock()
+        mock_trader.get_account.return_value = {
+            "cash": 100000.0, "portfolio_value": 100000.0,
+            "buying_power": 200000.0, "equity": 100000.0,
+            "last_equity": 100000.0, "daily_pnl": 0.0,
+        }
+        mock_trader.get_positions.return_value = []  # nothing held
+        mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
+
+        mock_grok = MagicMock()
+        mock_grok.collect_market_report.return_value = (make_mock_grok_report(), 100)
+
+        mock_opus = MagicMock()
+        # sell an unheld symbol - decision_schema must reject this
+        mock_opus.analyze.return_value = (make_mock_opus_decision(action="sell", quantity=10), 700)
+
+        mock_notifier = MagicMock()
+        mock_notifier.notify_alert = AsyncMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline") as mock_log_pipeline, \
+             patch("trading_core.log_trade"):
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+            mock_guard.max_daily_loss = 500
+
+            from trading_core import trading_cycle
+            await trading_cycle()
+
+        # RiskGuard still runs (it must, hold included), but with the decision
+        # already forced to hold - never with the invalid "sell" - and Alpaca
+        # is never reached.
+        mock_guard.check.assert_called_once()
+        assert mock_guard.check.call_args[0][0]["action"] == "hold"
+        mock_trader.execute_order.assert_not_called()
+
+        # warned, but as a warning (not the "Trading error" failure path)
+        mock_notifier.notify_alert.assert_awaited_once()
+        assert mock_notifier.notify_alert.call_args.args[1] == "warning"
+
+        assert "invalid_decision" in mock_log_pipeline.call_args.kwargs["rg_reason"]
+        assert mock_log_pipeline.call_args.kwargs["opus_output"]["action"] == "hold"
 
 
 class TestRiskGuardAdjustments:

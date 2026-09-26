@@ -482,10 +482,14 @@ class TestPipelineDataFlow:
             from trading_core import trading_cycle
             await trading_cycle()
 
-        # Verify guard.check() received the decision
+        # Verify guard.check() received Opus's decision (it passes through
+        # decision_schema.validate_decision first, which returns a rebuilt
+        # dict - same values, plus "decision_engine" added afterward - so
+        # compare per-field rather than by dict identity/equality).
         mock_guard.check.assert_called_once()
-        check_args = mock_guard.check.call_args
-        assert check_args[0][0] == decision  # first positional arg
+        received = mock_guard.check.call_args[0][0]
+        for key, value in decision.items():
+            assert received[key] == value, key
 
 
 class TestErrorHandlingIntegration:
