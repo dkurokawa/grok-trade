@@ -142,6 +142,17 @@ jobs:
           # Function URLs carry a trailing slash; strip it so callers can append paths
           echo "api_url=${API_URL%/}" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve API shared secret from SSM
+        id: secret
+        run: |
+          # Every endpoint except /health now requires x-api-key (Issue #1),
+          # so test_production_e2e.py needs this to test anything past /health.
+          SECRET=$(aws ssm get-parameter --region "$AWS_REGION" \
+            --name "/grok-trade/API_SHARED_SECRET" \
+            --with-decryption --query Parameter.Value --output text)
+          echo "::add-mask::$SECRET"
+          echo "api_shared_secret=$SECRET" >> "$GITHUB_OUTPUT"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -159,6 +170,7 @@ jobs:
         working-directory: backend
         env:
           PRODUCTION_API_URL: ${{ steps.url.outputs.api_url }}
+          PRODUCTION_API_SHARED_SECRET: ${{ steps.secret.outputs.api_shared_secret }}
         run: |
           pytest tests/test_production_e2e.py -v --tb=short
 
