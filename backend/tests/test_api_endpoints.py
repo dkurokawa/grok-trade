@@ -109,6 +109,22 @@ class TestStopStartEndpoints:
         client.post("/stop", headers={"x-api-key": SECRET})
         mock_notifier.notify_system_stop.assert_awaited_once()
 
+    def test_stop_returns_500_when_write_fails(self, client, monkeypatch):
+        def boom(_running):
+            raise RuntimeError("DynamoDB unavailable")
+
+        monkeypatch.setattr(app_module, "set_scheduler_state", boom)
+        r = client.post("/stop", headers={"x-api-key": SECRET})
+        assert r.status_code == 500
+
+    def test_start_returns_500_when_write_fails(self, client, monkeypatch):
+        def boom(_running):
+            raise RuntimeError("DynamoDB unavailable")
+
+        monkeypatch.setattr(app_module, "set_scheduler_state", boom)
+        r = client.post("/start", headers={"x-api-key": SECRET})
+        assert r.status_code == 500
+
 
 class TestTradesEndpoint:
     def test_requires_secret(self, client):

@@ -193,6 +193,29 @@ class TestFullTradingCycle:
         mock_notifier.notify_system_stop.assert_called()
 
     @pytest.mark.asyncio
+    async def test_system_health_stop_write_failure_still_skips_trade(self, mock_trader, mock_grok, mock_notifier):
+        """If persisting the stop flag fails, the cycle must still not trade
+        (the next cycle might not see the flag, but this one must not act as
+        if nothing happened), and the failure must be surfaced as an error."""
+        mock_trader.get_account.return_value["daily_pnl"] = -600.0
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.set_scheduler_state", side_effect=RuntimeError("boom")):
+            mock_guard.check_system_health.return_value = MagicMock(
+                allowed=False, reason="Daily loss limit exceeded"
+            )
+
+            from trading_core import trading_cycle
+            await trading_cycle()
+
+        mock_notifier.notify_system_stop.assert_called()
+        mock_notifier.notify_alert.assert_called()
+        mock_trader.execute_order.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_opus_skipped_no_significant_change(self, mock_trader, mock_notifier):
         """Test Opus is skipped when no significant change"""
         mock_grok = MagicMock()

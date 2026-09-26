@@ -111,7 +111,13 @@ async def trading_cycle():
         if not health.allowed:
             print(f"[RiskGuard] System stopped: {health.reason}")
             await notifier.notify_system_stop(health.reason)
-            set_scheduler_state(False)  # 以降のサイクルを停止
+            try:
+                set_scheduler_state(False)  # 以降のサイクルを停止
+            except Exception as e:
+                # The flag write failed, so the next cycle might not see the
+                # stop - but this cycle still must not trade (return below).
+                print(f"[DB] Failed to persist stop flag: {e}")
+                await notifier.notify_alert(f"Failed to persist stop flag: {e}", "error")
             return
 
         market_data = trader.get_market_data(WATCHLIST)

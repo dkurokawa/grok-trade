@@ -1,5 +1,5 @@
 """Lambda entrypoint tests (EventBridge task dispatch + Mangum API adapter)."""
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -49,6 +49,22 @@ class TestGuardRails:
         import trading_core
 
         dyn.set_scheduler_state(False)
+        with patch.object(trading_core, "trader", None):
+            asyncio.run(trading_core.trading_cycle())
+            assert trading_core.trader is None
+
+    def test_scheduler_read_failure_skips_cycle(self, dynamo_table, monkeypatch):
+        """A DynamoDB read error must fail closed (treated as stopped), not
+        fail open and trade with a stale/unknown scheduler state."""
+        import asyncio
+
+        import db.dynamo as dyn
+        import trading_core
+
+        broken_table = MagicMock()
+        broken_table.get_item.side_effect = RuntimeError("boom")
+        monkeypatch.setattr(dyn, "_get_table", lambda: broken_table)
+
         with patch.object(trading_core, "trader", None):
             asyncio.run(trading_core.trading_cycle())
             assert trading_core.trader is None

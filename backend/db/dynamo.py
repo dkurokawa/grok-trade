@@ -199,27 +199,38 @@ def get_pipeline_logs(limit: int = 50):
 # System state (key/value)  -- replaces the old scheduler.running flag
 # --------------------------------------------------------------------------
 def get_scheduler_state() -> bool:
+    """Fail closed: a read error means "assume stopped", not "assume running".
+
+    A DynamoDB outage must never be silently read as "the bot is fine, keep
+    trading" - that is backwards for a kill switch. The one case that still
+    defaults to True is an item that genuinely does not exist yet (first
+    deploy, before /stop has ever been called).
+    """
     try:
         resp = _get_table().get_item(Key={"pk": "STATE", "sk": "scheduler_running"})
-        item = resp.get("Item")
-        if item is not None:
-            return bool(item.get("running", True))
-        return True  # default: running
     except Exception as e:  # noqa: BLE001
-        print(f"[DB] Error getting scheduler state: {e}")
-        return True
+        print(f"[DB] Error getting scheduler state: {e} - treating as stopped")
+        return False
+    item = resp.get("Item")
+    if item is not None:
+        return bool(item.get("running", True))
+    return True  # no item yet: default to running
 
 
-def set_scheduler_state(running: bool):
-    try:
-        _get_table().put_item(
-            Item={
-                "pk": "STATE",
-                "sk": "scheduler_running",
-                "running": running,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        print(f"[DB] Scheduler state saved: {running}")
-    except Exception as e:  # noqa: BLE001
-        print(f"[DB] Error setting scheduler state: {e}")
+def set_scheduler_state(running: bool) -> None:
+    """Raises on failure rather than swallowing it.
+
+    Callers (the /stop /start endpoints, and the daily-loss auto-stop) must
+    know when the flag did not actually change, since silently continuing as
+    if it had is exactly the "kill switch that doesn't kill" bug this guards
+    against.
+    """
+    _get_table().put_item(
+        Item={
+            "pk": "STATE",
+            "sk": "scheduler_running",
+            "running": running,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    print(f"[DB] Scheduler state saved: {running}")

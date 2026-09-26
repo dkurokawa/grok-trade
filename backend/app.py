@@ -126,7 +126,10 @@ async def status():
 @app.post("/stop", dependencies=[Depends(_require_secret)])
 async def stop():
     """緊急停止（要シークレット）"""
-    set_scheduler_state(False)
+    try:
+        set_scheduler_state(False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to persist stop: {e}")
     await _get_notifier().notify_system_stop("Manual stop via API")
     return {"status": "stopped"}
 
@@ -134,7 +137,10 @@ async def stop():
 @app.post("/start", dependencies=[Depends(_require_secret)])
 async def start():
     """再開（要シークレット）"""
-    set_scheduler_state(True)
+    try:
+        set_scheduler_state(True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to persist start: {e}")
     await _get_notifier().notify_alert("Bot resumed", "info")
     return {"status": "running"}
 

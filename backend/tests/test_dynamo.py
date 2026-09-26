@@ -1,5 +1,6 @@
 """DynamoDB data-layer tests (moto-backed)."""
 import time
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,6 +20,24 @@ class TestSchedulerState:
         assert dyn.get_scheduler_state() is False
         dyn.set_scheduler_state(True)
         assert dyn.get_scheduler_state() is True
+
+    def test_read_failure_fails_closed(self, dyn, monkeypatch):
+        """A DynamoDB read error must read as "stopped", never "running" -
+        the opposite would make the kill switch fail open."""
+        broken_table = MagicMock()
+        broken_table.get_item.side_effect = RuntimeError("boom")
+        monkeypatch.setattr(dyn, "_get_table", lambda: broken_table)
+        assert dyn.get_scheduler_state() is False
+
+    def test_write_failure_raises(self, dyn, monkeypatch):
+        """A DynamoDB write error must propagate, not be swallowed - callers
+        (the /stop /start endpoints, the daily-loss auto-stop) need to know
+        the flag did not actually change."""
+        broken_table = MagicMock()
+        broken_table.put_item.side_effect = RuntimeError("boom")
+        monkeypatch.setattr(dyn, "_get_table", lambda: broken_table)
+        with pytest.raises(RuntimeError):
+            dyn.set_scheduler_state(False)
 
 
 class TestTrades:
