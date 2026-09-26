@@ -241,6 +241,26 @@ class TestEmergencyLiquidationFailureHandling:
         assert "Alpaca API down" in mock_notifier.notify_alert.call_args.args[0]
         assert dyn.get_scheduler_state() is False
 
+    def test_stops_trading_even_if_get_positions_fails(self, dynamo_table):
+        import asyncio
+
+        import db.dynamo as dyn
+        import trading_core
+
+        mock_trader = self._mock_trader()
+        mock_trader.get_positions.side_effect = RuntimeError("positions endpoint down")
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            with pytest.raises(RuntimeError):
+                asyncio.run(trading_core.emergency_check())
+
+        # The flag is written before get_positions() runs, so new buys stop.
+        assert dyn.get_scheduler_state() is False
+
     def test_full_success_does_not_raise_or_alert(self, dynamo_table):
         import asyncio
 

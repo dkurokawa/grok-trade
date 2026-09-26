@@ -348,6 +348,10 @@ class Trader:
         """
         self.trading_client.cancel_orders()
 
+    def cancel_order(self, order_id: str) -> None:
+        """Cancel one order by its Alpaca id. Failures propagate to the caller."""
+        self.trading_client.cancel_order_by_id(order_id)
+
     def get_order_status(self, order_id: str) -> dict | None:
         """注文ステータス確認"""
         try:

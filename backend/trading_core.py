@@ -527,6 +527,39 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
             )
             return
 
+        # Narrow the check-then-send window: if a stop landed while the order
+        # was in flight, take the order back. Buys only - a sell only reduces
+        # exposure, which is what a stop wants anyway.
+        if (
+            order
+            and decision["action"] == "buy"
+            and order["status"] not in FAILED_ORDER_STATUSES
+            and not get_scheduler_state()
+        ):
+            print(f"[Execute] Trading stopped while {order['order_id']} was being sent - cancelling it")
+            try:
+                _trader.cancel_order(order["order_id"])
+            except Exception as e:  # noqa: BLE001
+                print(f"[Trader] Cancel after stop failed: {e}")
+                try:
+                    await _notifier.notify_alert(
+                        f"Order {order['order_id']} ({symbol}) was sent after trading stopped "
+                        f"and could not be cancelled: {e}",
+                        "error",
+                    )
+                except Exception as alert_error:  # noqa: BLE001
+                    print(f"[Discord] Alert failed: {alert_error}")
+                raise
+            log_pipeline(
+                **base,
+                rg_passed=True,
+                rg_adjustments=rg_result.adjustments,
+                order_submitted=False,
+                alpaca_order_id=order["order_id"],
+                execution_result={"skipped": "stopped_during_send", "cancelled": order["order_id"]},
+            )
+            return
+
         if order and order["status"] not in FAILED_ORDER_STATUSES:
             exec_result = {
                 "alpaca_order_id": order["order_id"],
@@ -643,6 +676,13 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
             drawdown_pct = ((last_equity - equity) / last_equity) * 100
             if drawdown_pct > 5:
                 today = now.astimezone(NY_TZ).strftime("%Y-%m-%d")
+                # Stop new buys first, before anything below can fail (for
+                # example get_positions()). The branches below write the flag
+                # again and report a write failure; this is the early attempt.
+                try:
+                    set_scheduler_state(False)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[DB] Early stop-flag write failed: {e} - retrying below")
                 positions = _trader.get_positions()
 
                 if not positions:

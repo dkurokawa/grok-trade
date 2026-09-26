@@ -156,6 +156,32 @@ class TestFullTradingCycle:
         assert {"skipped": "stopped_during_cycle"} in results
 
     @pytest.mark.asyncio
+    async def test_stop_while_sending_cancels_the_buy(self, mock_trader, mock_grok, mock_opus, mock_notifier):
+        """A stop that lands between the last check and the order reaching Alpaca takes the buy back."""
+        states = iter([True, True, False])  # _ready, pre-send check, post-send check
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.get_scheduler_state", side_effect=lambda: next(states, False)), \
+             patch("trading_core.log_pipeline") as mock_log, \
+             patch("trading_core.log_trade") as mock_log_trade:
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+            mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
+            mock_guard.max_daily_loss = 500
+
+            from trading_core import trading_cycle
+            await trading_cycle()
+
+        mock_trader.execute_order.assert_called_once()
+        order_id = mock_trader.execute_order.return_value["order_id"]
+        mock_trader.cancel_order.assert_called_once_with(order_id)
+        mock_log_trade.assert_not_called()
+        results = [c.kwargs.get("execution_result") for c in mock_log.call_args_list]
+        assert any(r and r.get("skipped") == "stopped_during_send" for r in results)
+
+    @pytest.mark.asyncio
     async def test_hold_decision_no_trade(self, mock_trader, mock_grok, mock_notifier):
         """Test hold decision doesn't execute trade"""
         mock_opus = MagicMock()
