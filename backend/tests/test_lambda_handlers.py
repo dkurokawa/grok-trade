@@ -334,6 +334,62 @@ class TestEmergencyLiquidationFailureHandling:
         mock_notifier.notify_alert.assert_awaited_once()
         assert mock_notifier.notify_alert.call_args.args[1] == "error"
 
+    def test_full_success_but_stop_flag_failure_still_raises(self, dynamo_table, monkeypatch):
+        """F2: 清算そのものは成功しても、停止フラグの保存が失敗したら素通り
+        にせず通知して例外を送出する（以前は extra_failures に積まれる
+        だけで、liquidation_error も failed も無いので何も起きなかった）。"""
+        import asyncio
+
+        import trading_core
+        from trading_core import EmergencyLiquidationFailed
+
+        mock_trader = self._mock_trader()
+        mock_trader.execute_emergency_liquidation.return_value = [
+            {"symbol": "MSTR", "status": 200, "ok": True},
+        ]
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        def boom(_running):
+            raise RuntimeError("DynamoDB unavailable")
+
+        monkeypatch.setattr(trading_core, "set_scheduler_state", boom)
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            with pytest.raises(EmergencyLiquidationFailed, match="stop flag write failed"):
+                asyncio.run(trading_core.emergency_check())
+
+        mock_notifier.notify_alert.assert_awaited_once()
+
+    def test_full_success_but_record_write_failure_still_raises(self, dynamo_table, monkeypatch):
+        """F2: 「本日処理済み」の記録の書き込み失敗も同様に扱う。"""
+        import asyncio
+
+        import trading_core
+        from trading_core import EmergencyLiquidationFailed
+
+        mock_trader = self._mock_trader()
+        mock_trader.execute_emergency_liquidation.return_value = [
+            {"symbol": "MSTR", "status": 200, "ok": True},
+        ]
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        def boom(_date):
+            raise RuntimeError("DynamoDB unavailable")
+
+        monkeypatch.setattr(trading_core, "record_emergency_liquidation", boom)
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            with pytest.raises(EmergencyLiquidationFailed, match="liquidation record write failed"):
+                asyncio.run(trading_core.emergency_check())
+
+        mock_notifier.notify_alert.assert_awaited_once()
+
     def test_get_account_failure_notify_also_failing_still_raises(self, dynamo_table):
         """The general-exception path's own notify_alert failing must not
         swallow the original exception either."""
@@ -379,8 +435,10 @@ class TestEmergencyCheckLockFailOpen:
 
 
 class TestEmergencyLiquidationDailyDedup:
-    """E4: at most one emergency liquidation attempt per NY calendar day,
-    and none at all if nothing is held."""
+    """F1/F4: the "already handled today" record exists only to avoid
+    repeating notification/order-cancellation noise once nothing is left to
+    do - it never blocks a retry while positions remain, and it is only
+    written when the liquidation attempt fully succeeded."""
 
     def _mock_trader(self, drawdown_pct: float = 10.0):
         t = MagicMock()
@@ -391,12 +449,14 @@ class TestEmergencyLiquidationDailyDedup:
         ]
         return t
 
-    def test_second_check_same_day_does_not_liquidate_again(self, dynamo_table):
+    def test_record_exists_but_positions_remain_liquidates_again(self, dynamo_table):
+        """F1: 記録は通知/注文取り消しの重複を避けるためだけに使う。保有が
+        残っている限り、同じ日でも清算を再度試みる。"""
         import asyncio
 
         import trading_core
 
-        mock_trader = self._mock_trader()
+        mock_trader = self._mock_trader()  # always reports the same open position
         mock_notifier = MagicMock()
         mock_notifier.send_pipeline_log = AsyncMock()
         mock_notifier.notify_alert = AsyncMock()
@@ -407,7 +467,29 @@ class TestEmergencyLiquidationDailyDedup:
             asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-01T14:00:00Z"))
             asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-01T14:05:00Z"))
 
-        mock_trader.execute_emergency_liquidation.assert_called_once()
+        assert mock_trader.execute_emergency_liquidation.call_count == 2
+
+    def test_failed_liquidation_does_not_record(self, dynamo_table):
+        """F1: 清算注文の作成に失敗したら「本日処理済み」を記録しない -
+        記録すると保有が残っているのに再試行が止まってしまう。"""
+        import asyncio
+
+        import db.dynamo as dyn
+        import trading_core
+        from trading_core import EmergencyLiquidationFailed
+
+        mock_trader = self._mock_trader()
+        mock_trader.execute_emergency_liquidation.side_effect = RuntimeError("Alpaca API down")
+        mock_notifier = MagicMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            with pytest.raises(EmergencyLiquidationFailed):
+                asyncio.run(trading_core.emergency_check(scheduled_time="2026-06-01T14:00:00Z"))
+
+        assert dyn.emergency_liquidation_recorded_for("2026-06-01") is False
 
     def test_next_day_checks_again(self, dynamo_table):
         import asyncio
@@ -427,9 +509,12 @@ class TestEmergencyLiquidationDailyDedup:
 
         assert mock_trader.execute_emergency_liquidation.call_count == 2
 
-    def test_no_positions_held_does_nothing(self, dynamo_table):
+    def test_no_positions_held_stops_and_cancels_pending_orders(self, dynamo_table):
+        """F4: 保有がゼロでも、清算対象が無いだけで停止と未約定注文の取り消し
+        は行う（放置すると未約定の買い注文がそのまま約定してしまう）。"""
         import asyncio
 
+        import db.dynamo as dyn
         import trading_core
 
         mock_trader = self._mock_trader()
@@ -443,7 +528,54 @@ class TestEmergencyLiquidationDailyDedup:
             asyncio.run(trading_core.emergency_check())
 
         mock_trader.execute_emergency_liquidation.assert_not_called()
+        mock_trader.cancel_all_orders.assert_called_once()
+        assert dyn.get_scheduler_state() is False
         mock_notifier.notify_alert.assert_not_called()
+
+    def test_no_positions_cancel_failure_notifies_and_raises(self, dynamo_table):
+        """F4: 未約定注文の取り消し自体が失敗したら、素通りにせず通知して
+        例外を送出する（保有がある場合の F2 と同じ扱い）。"""
+        import asyncio
+
+        import trading_core
+        from trading_core import EmergencyLiquidationFailed
+
+        mock_trader = self._mock_trader()
+        mock_trader.get_positions.return_value = []
+        mock_trader.cancel_all_orders.side_effect = RuntimeError("Alpaca API down")
+        mock_notifier = MagicMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            with pytest.raises(EmergencyLiquidationFailed, match="cancel pending orders failed"):
+                asyncio.run(trading_core.emergency_check())
+
+        mock_notifier.notify_alert.assert_awaited_once()
+
+    def test_no_positions_stop_flag_failure_notifies_and_raises(self, dynamo_table, monkeypatch):
+        """F4: 停止フラグの保存に失敗した場合も同様に通知して例外を送出する。"""
+        import asyncio
+
+        import trading_core
+        from trading_core import EmergencyLiquidationFailed
+
+        mock_trader = self._mock_trader()
+        mock_trader.get_positions.return_value = []
+        mock_notifier = MagicMock()
+        mock_notifier.notify_alert = AsyncMock()
+
+        def boom(_running):
+            raise RuntimeError("DynamoDB unavailable")
+
+        monkeypatch.setattr(trading_core, "set_scheduler_state", boom)
+
+        with patch.object(trading_core, "trader", mock_trader), \
+             patch.object(trading_core, "notifier", mock_notifier):
+            with pytest.raises(EmergencyLiquidationFailed, match="stop flag write failed"):
+                asyncio.run(trading_core.emergency_check())
+
+        mock_notifier.notify_alert.assert_awaited_once()
 
     def test_record_read_failure_fails_open_and_still_liquidates(self, dynamo_table, monkeypatch):
         """E3/E4: a failure reading today's record must not be read as "skip

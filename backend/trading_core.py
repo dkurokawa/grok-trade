@@ -201,6 +201,19 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
         await _alert_startup_failure("Trading cycle", e)
         return
 
+    # F8: 市場カレンダーで閉場中なら取引しない（ログのみ）。EventBridge の
+    # cron は祝日・臨時休場を知らないので、営業日どうかは Alpaca の clock で
+    # 確認する必要がある。取得失敗は fail closed（取引しない） - 開場中か
+    # 分からない状態で取引を進めるほうが危険。
+    assert trader is not None  # _ready() succeeded, so this is constructed
+    try:
+        if not trader.is_market_open():
+            print("[Trading cycle] Market is closed - skipping")
+            return
+    except Exception as e:  # noqa: BLE001
+        print(f"[Trading cycle] Could not confirm market is open: {e} - skipping (fail closed)")
+        return
+
     # Claim this 30-min slot before doing anything else. A retried/duplicate
     # EventBridge invocation (or a manual re-run) for the same slot is
     # rejected here instead of running the pipeline - and placing orders -
@@ -237,14 +250,23 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
         health = _guard.check_system_health(daily_pnl)
         if not health.allowed:
             print(f"[RiskGuard] System stopped: {health.reason}")
-            await _notifier.notify_system_stop(health.reason or "unknown")
+            # F3: 停止フラグの保存を先に、Discord 通知は後にする（通知が
+            # 詰まる/失敗しても保存が行われるように）。通知はそれぞれ個別の
+            # try で行い、どちらが失敗してももう片方の結果に影響しない。
             try:
                 set_scheduler_state(False)  # 以降のサイクルを停止
             except Exception as e:
                 # The flag write failed, so the next cycle might not see the
                 # stop - but this cycle still must not trade (return below).
                 print(f"[DB] Failed to persist stop flag: {e}")
-                await _notifier.notify_alert(f"Failed to persist stop flag: {e}", "error")
+                try:
+                    await _notifier.notify_alert(f"Failed to persist stop flag: {e}", "error")
+                except Exception as notify_err:
+                    print(f"[Discord] Failure alert failed: {notify_err}")
+            try:
+                await _notifier.notify_system_stop(health.reason or "unknown")
+            except Exception as e:
+                print(f"[Discord] System stop notification failed: {e}")
             return
 
         market_data = _trader.get_market_data(WATCHLIST)
@@ -605,29 +627,52 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
         if last_equity > 0:
             drawdown_pct = ((last_equity - equity) / last_equity) * 100
             if drawdown_pct > 5:
-                # E4: at most one liquidation attempt per NY calendar day -
-                # repeating a failed one every 5 minutes for the rest of the
-                # session would just spam the same failure without helping.
                 today = now.astimezone(NY_TZ).strftime("%Y-%m-%d")
+                positions = _trader.get_positions()
+
+                if not positions:
+                    # F4: 保有はゼロでも、未約定の買い注文が残っていればそれが
+                    # 約定して新規にポジションを持ってしまう。清算する保有は
+                    # 無いが、停止と未約定注文の取り消しは行う。
+                    print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5%, but nothing is held - "
+                          f"stopping and cancelling any pending orders")
+                    no_position_failures: list[str] = []
+                    try:
+                        _trader.cancel_all_orders()
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[Trader] Failed to cancel pending orders: {e}")
+                        no_position_failures.append(f"cancel pending orders failed: {e}")
+                    try:
+                        set_scheduler_state(False)
+                    except Exception as e:
+                        print(f"[DB] Failed to persist stop flag: {e}")
+                        no_position_failures.append(f"stop flag write failed: {e}")
+                    if no_position_failures:
+                        detail = "; ".join(no_position_failures)
+                        print(f"[EMERGENCY] Emergency stop (no positions held) had failures: {detail}")
+                        try:
+                            await _notifier.notify_alert(
+                                f"Emergency stop (no positions held) had failures: {detail}", "error"
+                            )
+                        except Exception as e:
+                            print(f"[Discord] Failure alert failed: {e}")
+                            detail += f" | also: alert failed: {e}"
+                        raise EmergencyLiquidationFailed(detail)
+                    return
+
+                # F1: 「本日処理済み」の記録は、通知と注文取り消しを繰り返さない
+                # ためだけに使う - 清算そのものを止める理由にはしない。記録が
+                # あっても保有が残っている限り清算を試みる（読み取り失敗は
+                # E3 と同じ fail open で「未処理」扱い）。
                 try:
                     already_handled_today = emergency_liquidation_recorded_for(today)
                 except Exception as e:  # noqa: BLE001
-                    # Same fail-open policy as the lock check (E3): a read
-                    # failure must not be read as "skip the safety net".
                     print(f"[DB] Could not check emergency liquidation record for {today}: "
                           f"{e} - continuing anyway (fail open)")
                     already_handled_today = False
-
                 if already_handled_today:
-                    print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5%, but an emergency "
-                          f"liquidation was already recorded for {today} - skipping (log only)")
-                    return
-
-                positions = _trader.get_positions()
-                if not positions:
-                    print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5%, but nothing is "
-                          f"held - nothing to liquidate")
-                    return
+                    print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5%, and today's liquidation "
+                          f"was already recorded, but positions still remain - retrying")
 
                 print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5% → liquidating")
 
@@ -639,19 +684,21 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
                     liquidation_error = e
 
                 failed = [r for r in results if not r.get("ok", True)]
+                liquidation_ok = not liquidation_error and not failed
                 extra_failures: list[str] = []
 
-                # 実行した以上、成否に関わらず今日の分として記録する（E4）。
-                # 失敗した清算を5分おきに何度も再試行しても状況は変わらない
-                # ことが多く、その都度アラートを出すのはノイズになるだけ。
-                try:
-                    record_emergency_liquidation(today)
-                except Exception as e:
-                    print(f"[DB] Failed to record emergency liquidation for {today}: {e}")
-                    extra_failures.append(f"liquidation record write failed: {e}")
+                # F1: 清算注文の作成がすべて成功したときだけ記録する。失敗時に
+                # 記録すると、保有が残っているのに次回以降の再試行が止まって
+                # しまう。
+                if liquidation_ok:
+                    try:
+                        record_emergency_liquidation(today)
+                    except Exception as e:
+                        print(f"[DB] Failed to record emergency liquidation for {today}: {e}")
+                        extra_failures.append(f"liquidation record write failed: {e}")
 
                 reason = f"EMERGENCY STOP: drawdown {drawdown_pct:.1f}%"
-                if liquidation_error or failed:
+                if not liquidation_ok:
                     reason += " - LIQUIDATION FAILED, see error alert"
 
                 try:
@@ -666,32 +713,41 @@ async def emergency_check(scheduled_time: str | None = None) -> None:
                 # ドローダウンを検知した以上、清算の成否に関わらず以降の
                 # 自動取引は止める（部分的にしか清算できていない状態で
                 # 取引を再開するのが最悪のシナリオ）。書き込み自体が失敗しても
-                # （E2）先へ進み、最後にまとめて例外を送出する - どちらかの
-                # 失敗で止まって清算失敗の報告自体が消えるのを避ける。
+                # 先へ進み、最後にまとめて例外を送出する - どれかの失敗で
+                # 止まって清算失敗の報告自体が消えるのを避ける。
                 try:
                     set_scheduler_state(False)
                 except Exception as e:
                     print(f"[DB] Failed to persist stop flag: {e}")
                     extra_failures.append(f"stop flag write failed: {e}")
 
-                if liquidation_error or failed:
-                    if liquidation_error:
-                        detail = str(liquidation_error)
+                # F2: 清算そのものは成功しても、記録・通知・停止フラグ保存の
+                # いずれかが失敗したら素通りにせず、通知して例外を送出する
+                # （以前は liquidation_ok のとき extra_failures があっても
+                # ここを通らず、静かに正常終了していた）。
+                if not liquidation_ok or extra_failures:
+                    if not liquidation_ok:
+                        if liquidation_error:
+                            detail = str(liquidation_error)
+                        else:
+                            detail = "; ".join(
+                                f"{r['symbol']}: {r.get('error', r['status'])}" for r in failed
+                            )
                     else:
-                        detail = "; ".join(
-                            f"{r['symbol']}: {r.get('error', r['status'])}" for r in failed
-                        )
+                        detail = "liquidation orders submitted successfully"
                     if extra_failures:
                         detail += " | also: " + "; ".join(extra_failures)
 
-                    print(f"[EMERGENCY] Liquidation failed: {detail}")
+                    print(f"[EMERGENCY] Liquidation failed or incomplete: {detail}")
                     try:
-                        await _notifier.notify_alert(f"Emergency liquidation failed: {detail}", "error")
+                        await _notifier.notify_alert(
+                            f"Emergency liquidation failed or incomplete: {detail}", "error"
+                        )
                     except Exception as e:
                         print(f"[Discord] Failure alert failed: {e}")
                         detail += f" | also: alert failed: {e}"
-                    # 清算失敗・停止フラグ書き込み失敗・通知失敗のどれが
-                    # 起きても、最後に必ずこれを送出する（E2）。
+                    # 清算失敗・記録/通知/停止フラグ書き込み失敗のどれが
+                    # 起きても、最後に必ずこれを送出する（E2/F2）。
                     raise EmergencyLiquidationFailed(detail)
     except EmergencyLiquidationFailed:
         raise

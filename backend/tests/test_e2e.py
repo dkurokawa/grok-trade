@@ -217,6 +217,32 @@ class TestFullTradingCycle:
         mock_trader.execute_order.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_system_health_stop_persists_flag_even_if_notify_fails(
+        self, mock_trader, mock_grok, mock_notifier
+    ):
+        """F3: 停止フラグの保存を先に行うので、その後の Discord 通知
+        (notify_system_stop) が失敗しても保存は済んでいる（以前は通知が
+        先で、それ自体が例外を投げると保存の try にすら到達しなかった）。"""
+        mock_trader.get_account.return_value["daily_pnl"] = -600.0
+        mock_notifier.notify_system_stop = AsyncMock(side_effect=RuntimeError("Discord webhook down"))
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.set_scheduler_state") as mock_set_state:
+            mock_guard.check_system_health.return_value = MagicMock(
+                allowed=False, reason="Daily loss limit exceeded"
+            )
+
+            from trading_core import trading_cycle
+            await trading_cycle()  # must not raise
+
+            mock_set_state.assert_called_once_with(False)
+
+        mock_trader.execute_order.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_opus_skipped_no_significant_change(self, mock_trader, mock_notifier):
         """Test Opus is skipped when no significant change"""
         mock_grok = MagicMock()
@@ -245,6 +271,87 @@ class TestFullTradingCycle:
         # Discord skip log
         log_calls = [c.args[1] for c in mock_notifier.send_pipeline_log.call_args_list]
         assert "skip" in log_calls
+
+
+class TestMarketClockGate:
+    """F8: trading_cycle() must not run outside Alpaca's market hours, and
+    must fail closed (not trade) if it can't even confirm the market is
+    open - EventBridge's cron doesn't know about holidays/early closes."""
+
+    @pytest.fixture
+    def mock_trader(self):
+        t = MagicMock()
+        t.get_account.return_value = {
+            "cash": 100000.0,
+            "portfolio_value": 100000.0,
+            "buying_power": 200000.0,
+            "equity": 100000.0,
+            "last_equity": 99500.0,
+            "daily_pnl": 0.0,
+        }
+        t.get_positions.return_value = []
+        t.get_market_data.return_value = {}  # empty -> cycle returns right after the gate
+        return t
+
+    @pytest.fixture
+    def mock_notifier(self):
+        n = MagicMock()
+        n.notify_alert = AsyncMock()
+        n.notify_system_stop = AsyncMock()
+        n.send_pipeline_log = AsyncMock()
+        return n
+
+    @pytest.mark.asyncio
+    async def test_market_closed_skips_cycle(self, mock_trader, mock_notifier):
+        mock_trader.is_market_open.return_value = False
+        mock_grok = MagicMock()
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard:
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+
+            from trading_core import trading_cycle
+            await trading_cycle()
+
+        mock_trader.get_account.assert_not_called()
+        mock_grok.collect_market_report.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_clock_fetch_failure_fails_closed(self, mock_trader, mock_notifier):
+        mock_trader.is_market_open.side_effect = RuntimeError("Alpaca API down")
+        mock_grok = MagicMock()
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard:
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+
+            from trading_core import trading_cycle
+            await trading_cycle()  # must not raise
+
+        mock_trader.get_account.assert_not_called()
+        mock_grok.collect_market_report.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_market_open_proceeds_past_the_gate(self, mock_trader, mock_notifier):
+        mock_trader.is_market_open.return_value = True
+        mock_grok = MagicMock()
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard:
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+
+            from trading_core import trading_cycle
+            await trading_cycle()
+
+        # got past the gate and into the pipeline (empty market data then
+        # ends the cycle early, but get_account() proves it wasn't skipped)
+        mock_trader.get_account.assert_called_once()
 
 
 class TestSellCycle:

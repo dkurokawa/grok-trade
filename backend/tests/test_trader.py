@@ -879,6 +879,63 @@ class TestEmergencyLiquidation:
             t.execute_emergency_liquidation()
 
 
+class TestMarketClock:
+    """F8: is_market_open() gates trading_cycle() on Alpaca's market calendar."""
+
+    @pytest.fixture
+    def trader(self):
+        with patch("trader.TradingClient") as mock_trading:
+            with patch("trader.StockHistoricalDataClient"):
+                return Trader(), mock_trading.return_value
+
+    def test_open(self, trader):
+        t, mock_client = trader
+        clock = MagicMock()
+        clock.is_open = True
+        mock_client.get_clock.return_value = clock
+
+        assert t.is_market_open() is True
+
+    def test_closed(self, trader):
+        t, mock_client = trader
+        clock = MagicMock()
+        clock.is_open = False
+        mock_client.get_clock.return_value = clock
+
+        assert t.is_market_open() is False
+
+    def test_fetch_failure_raises(self, trader):
+        """F8: fail closed - 呼び出し元 (trading_core) が「開場中か分からない
+        ので取引しない」と判断できるよう、例外をそのまま送出する。"""
+        t, mock_client = trader
+        mock_client.get_clock.side_effect = RuntimeError("Alpaca API down")
+
+        with pytest.raises(RuntimeError, match="Alpaca API down"):
+            t.is_market_open()
+
+
+class TestCancelAllOrders:
+    """F4: emergency_check() cancels pending orders even when there is
+    nothing held to liquidate."""
+
+    @pytest.fixture
+    def trader(self):
+        with patch("trader.TradingClient") as mock_trading:
+            with patch("trader.StockHistoricalDataClient"):
+                return Trader(), mock_trading.return_value
+
+    def test_cancels_all_orders(self, trader):
+        t, mock_client = trader
+        t.cancel_all_orders()
+        mock_client.cancel_orders.assert_called_once_with()
+
+    def test_failure_propagates(self, trader):
+        t, mock_client = trader
+        mock_client.cancel_orders.side_effect = RuntimeError("boom")
+        with pytest.raises(RuntimeError, match="boom"):
+            t.cancel_all_orders()
+
+
 class TestClientOrderIdDedup:
     """execute_order() checks get_order_by_client_id() before submitting
     (E5) - the second line of defense behind trading_core's DynamoDB slot
@@ -908,6 +965,17 @@ class TestClientOrderIdDedup:
         order.side.value, order.qty, order.type.value = side, "7", "market"
         order.status.value, order.submitted_at = "accepted", datetime.now()
         return order
+
+    def _duplicate_rejected(self):
+        """Simulates Alpaca's submit_order() rejecting a request because its
+        client_order_id was already used (422) - the race where another
+        invocation submits the same client_order_id between our pre-submit
+        check (404) and this submit_order() call."""
+        from alpaca.common.exceptions import APIError
+
+        http_error = MagicMock()
+        http_error.response.status_code = 422
+        return APIError('{"code": 42910000, "message": "client_order_id must be unique"}', http_error)
 
     def test_client_order_id_is_sent_on_the_request(self, trader):
         t, mock_client = trader
@@ -981,3 +1049,46 @@ class TestClientOrderIdDedup:
 
         result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
         assert result is None
+
+    def test_submit_race_confirmed_duplicate_raises(self, trader):
+        """F6: 事前確認は404だったが、その直後に別の呼び出しが先に同じ
+        client_order_id で発注したレースで submit_order() 自体が422で
+        拒否した場合、もう一度確認して重複と分かれば DuplicateOrderError
+        にする（文字列判定はしない）。"""
+        t, mock_client = trader
+        existing = self._mock_order()
+        mock_client.get_order_by_client_id.side_effect = [self._not_found(), existing]
+        mock_client.submit_order.side_effect = self._duplicate_rejected()
+
+        with pytest.raises(DuplicateOrderError):
+            t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert mock_client.get_order_by_client_id.call_count == 2
+
+    def test_submit_422_not_confirmed_returns_none(self, trader):
+        """422 で拒否されても、もう一度確認して見つからなければ重複とは
+        断定せず、従来どおり「発注失敗」として None を返す。"""
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = [self._not_found(), self._not_found()]
+        mock_client.submit_order.side_effect = self._duplicate_rejected()
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert result is None
+
+    def test_submit_error_other_status_not_treated_as_duplicate(self, trader):
+        """422 以外の submit_order エラーは、もう一度の確認すら行わず
+        従来どおり None を返す。"""
+        from alpaca.common.exceptions import APIError
+
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = self._not_found()
+        http_error = MagicMock()
+        http_error.response.status_code = 403
+        mock_client.submit_order.side_effect = APIError('{"message": "forbidden"}', http_error)
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert result is None
+        # only the pre-submit confirmation call, no post-submit re-check
+        assert mock_client.get_order_by_client_id.call_count == 1

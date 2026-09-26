@@ -64,6 +64,16 @@ class Trader:
             "daily_pnl": float(account.equity or 0) - float(account.last_equity or 0),
         }
 
+    def is_market_open(self) -> bool:
+        """Alpaca の取引カレンダーで現在が開場中か。
+
+        取得失敗は例外として送出する（F8: fail closed - 開場中かどうか
+        分からない以上、新規の取引サイクルは動かさない）。
+        """
+        clock = self.trading_client.get_clock()
+        assert not isinstance(clock, dict)  # see get_account()
+        return bool(clock.is_open)
+
     def get_open_buy_orders(self) -> list[dict]:
         """未約定の「買い」注文一覧（symbol・qty・limit_price）。
 
@@ -175,6 +185,12 @@ class Trader:
         したら、buy は発注しない（E5・E1 と同じ fail closed: 重複かどうか
         分からない新規の買いは見送る）。sell はそのまま発注する（保有解消は
         fail open: 確認できないからといって手仕舞いを止めない）。
+
+        事前確認が 404 (not_found) だった直後に、別の呼び出しが先に同じ
+        client_order_id で発注してしまうレースは残る。その場合 submit_order()
+        自体が 422 で拒否するので、その例外を捕まえてもう一度
+        get_order_by_client_id() で確認し、見つかれば同じく DuplicateOrderError
+        にする（F6。メッセージ文字列には頼らない）。
         """
         if action not in ["buy", "sell"]:
             print(f"[Trader] Invalid action: {action}")
@@ -270,6 +286,26 @@ class Trader:
             return result
 
         except Exception as e:
+            # F6: 発注前の事前確認 (get_order_by_client_id, 上) と
+            # submit_order() のこの呼び出しの間に別の呼び出しが先に同じ
+            # client_order_id で発注しているレースだと、Alpaca は 422 で
+            # 拒否する。メッセージ文字列には頼らず、もう一度
+            # get_order_by_client_id() で実在を確認できた場合だけ
+            # DuplicateOrderError にする（それ以外の 422 や理由不明のエラーは
+            # 従来どおり「発注失敗」として None を返す）。
+            if client_order_id and isinstance(e, APIError) and e.status_code == 422:
+                post_submit_existing = None
+                try:
+                    post_submit_existing = self.trading_client.get_order_by_client_id(client_order_id)
+                except Exception:
+                    pass
+                if post_submit_existing is not None:
+                    assert not isinstance(post_submit_existing, dict)  # see get_account()
+                    raise DuplicateOrderError(
+                        f"Order for {symbol} already submitted (client_order_id={client_order_id}, "
+                        f"existing order_id={post_submit_existing.id})"
+                    ) from e
+
             print(f"[Trader] Order error: {e}")
             return None
 
@@ -301,6 +337,16 @@ class Trader:
                 print(f"[Trader] Emergency close FAILED: {r.symbol} "
                       f"(status {r.status}): {entry.get('error', 'unknown')}")
         return results
+
+    def cancel_all_orders(self) -> None:
+        """すべての未約定注文を取り消す（ポジションのクローズは行わない）。
+
+        ドローダウン検知時、保有はゼロでも未約定の買い注文が残っている
+        ことがある（F4）。清算する保有が無いだけで、それが約定して新規に
+        ポジションを持ってしまう事態は防ぐ必要がある。失敗は例外として
+        呼び出し元 (trading_core.emergency_check) に伝える。
+        """
+        self.trading_client.cancel_orders()
 
     def get_order_status(self, order_id: str) -> dict | None:
         """注文ステータス確認"""
