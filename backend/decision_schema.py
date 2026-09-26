@@ -74,6 +74,14 @@ class TradeDecision(BaseModel):
                     f"take_profit must be > current price ({current_price}) for buy, "
                     f"got {self.take_profit}"
                 )
+            if self.order_type == "limit" and self.limit_price is not None:
+                lower_bound = current_price * 0.9
+                upper_bound = current_price * 1.1
+                if not (lower_bound <= self.limit_price <= upper_bound):
+                    raise ValueError(
+                        f"limit_price {self.limit_price} is outside ±10% of "
+                        f"current price ({current_price})"
+                    )
 
         return self
 

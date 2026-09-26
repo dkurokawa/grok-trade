@@ -281,6 +281,99 @@ class TestTotalPositionRatioCap:
         result = guard.check(decision, portfolio)
         assert result.allowed is True
 
+    def test_open_buy_order_value_counts_toward_the_limit(self, guard, empty_positions):
+        """未約定の買い注文の想定額も総ポジション上限に含める(M2)。別銘柄の
+        未約定注文だけで、新規発注と合わせて上限を超えること。"""
+        decision = {
+            "action": "buy", "confidence": 80, "stop_loss": 100,
+            "position_size_pct": 20, "quantity": 10,
+        }
+        # 別銘柄 (TSLA) への未約定注文で $49,000 相当が既に確保されている。
+        portfolio = {
+            "daily_pnl": 0,
+            "positions": empty_positions,
+            "open_buy_order_value": 49000.0,
+        }
+        # quantity=10 @ price=350 は $3,500 - 単独なら余裕で上限内だが、
+        # $49,000 の未約定注文と合わせると $52,500 > 50% of $100,000。
+        result = guard.check(decision, portfolio, price=350.0, equity=100000.0)
+        assert result.allowed is False
+        assert "position_ratio_exceeds_limit" in result.reason
+
+    def test_open_buy_order_value_defaults_to_zero(self, guard, empty_positions):
+        """portfolio に open_buy_order_value が無くても従来どおり動く。"""
+        decision = {
+            "action": "buy", "confidence": 80, "stop_loss": 100,
+            "position_size_pct": 20, "quantity": 10,
+        }
+        portfolio = {"daily_pnl": 0, "positions": empty_positions}
+        result = guard.check(decision, portfolio, price=350.0, equity=100000.0)
+        assert result.allowed is True
+
+
+class TestEffectiveBuyPrice:
+    """買いの株数・総ポジション額の計算に使う実効価格 (H1): 成行は現在値、
+    指値は max(現在値, limit_price) - 指値が現在値より高くても、その価格で
+    約定し得る前提でサイズを決める（低い方を使うと exposure を過小評価する）。"""
+
+    @pytest.fixture
+    def guard(self):
+        with patch.dict(os.environ, {
+            "MAX_DAILY_LOSS": "500", "MAX_POSITION_RATIO": "0.5",
+            "MAX_SINGLE_TRADE_PCT": "0.25", "MIN_CONFIDENCE": "40",
+        }):
+            return RiskGuard()
+
+    def test_market_order_uses_current_price(self, guard):
+        from risk_guard import effective_buy_price
+        assert effective_buy_price(100.0, "market", None) == 100.0
+        assert effective_buy_price(100.0, "market", 500.0) == 100.0  # market には limit_price が無関係
+
+    def test_limit_above_current_price_uses_limit_price(self, guard):
+        from risk_guard import effective_buy_price
+        assert effective_buy_price(100.0, "limit", 500.0) == 500.0
+
+    def test_limit_below_current_price_uses_current_price(self, guard):
+        from risk_guard import effective_buy_price
+        assert effective_buy_price(100.0, "limit", 90.0) == 100.0
+
+    def test_limit_order_far_above_current_price_is_capped_by_the_high_price(self, guard):
+        """現在値 $100・指値 $500 のケース: 実効価格に指値 $500 を使うので、
+        最悪 $500 で約定しても総ポジション上限(50%)・単一トレード上限(25%)を
+        超えない株数まで自動的に縮む。"""
+        decision = {
+            "action": "buy", "confidence": 80, "stop_loss": 90,
+            "order_type": "limit", "limit_price": 500.0,
+            "position_size_pct": 25, "quantity": 100,
+        }
+        portfolio = {"daily_pnl": 0, "positions": []}
+        result = guard.check(decision, portfolio, price=100.0, equity=10000.0)
+
+        assert result.allowed is True
+        # 25% of $10,000 = $2,500; at the effective price of $500 that's 5 shares.
+        # (100 が price=$100 で計算されていたら 25 株になってしまい、$500 で
+        # 約定すれば $12,500 と上限を大幅に超えていた。)
+        assert decision["quantity"] == 5
+        worst_case_exposure = decision["quantity"] * 500.0
+        assert worst_case_exposure <= 10000.0 * 0.25
+
+    def test_limit_order_total_ratio_uses_effective_price(self, guard, large_position):
+        """total position ratio (Stage 7) も実効価格を使う。price のままでは
+        見逃してしまう超過を、指値の実効価格を使うことで検出できることを確認する。"""
+        decision = {
+            "action": "buy", "confidence": 80, "stop_loss": 90,
+            "order_type": "limit", "limit_price": 500.0,
+            "position_size_pct": 25, "quantity": 25,
+        }
+        portfolio = {"daily_pnl": 0, "positions": large_position}
+        # large_position の時価が $40,000 (40% of equity)。実効価格 ($500) で
+        # 25株買うと +$12,500 = 52.5% > 50%上限 → ブロックされるはず。
+        # price=$100 のまま計算していたら +$2,500 = 42.5% で通ってしまっていた
+        # （H1 で直したバグそのもの）。
+        result = guard.check(decision, portfolio, price=100.0, equity=100000.0)
+        assert result.allowed is False
+        assert "position_ratio_exceeds_limit" in result.reason
+
 
 class TestCheckSystemHealth:
     @pytest.fixture

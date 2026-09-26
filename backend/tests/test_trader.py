@@ -744,15 +744,19 @@ class TestOpenBuyOrders:
             with patch("trader.StockHistoricalDataClient"):
                 return Trader(), mock_trading.return_value
 
+    def _order(self, symbol, side, qty=1.0, limit_price=None):
+        o = MagicMock()
+        o.symbol, o.side, o.qty, o.limit_price = symbol, side, qty, limit_price
+        return o
+
     def test_returns_only_buy_side_symbols(self, order_trader):
         """Protective sells linger for held symbols; they must not look like a
         pending entry and block the next buy forever."""
         from alpaca.trading.enums import OrderSide
         t, mock_client = order_trader
 
-        buy, sell = MagicMock(), MagicMock()
-        buy.symbol, buy.side = "MSTR", OrderSide.BUY
-        sell.symbol, sell.side = "TSLA", OrderSide.SELL
+        buy = self._order("MSTR", OrderSide.BUY)
+        sell = self._order("TSLA", OrderSide.SELL)
         mock_client.get_orders.return_value = [buy, sell]
 
         assert t.get_open_buy_order_symbols() == {"MSTR"}
@@ -761,6 +765,48 @@ class TestOpenBuyOrders:
         t, mock_client = order_trader
         mock_client.get_orders.side_effect = RuntimeError("boom")
         assert t.get_open_buy_order_symbols() == set()
+
+
+class TestGetOpenBuyOrders:
+    """get_open_buy_orders() (Issue M2): symbol/qty/limit_price for each
+    open buy order, used to fold pending buys into the total position ratio."""
+
+    @pytest.fixture
+    def order_trader(self):
+        with patch("trader.TradingClient") as mock_trading:
+            with patch("trader.StockHistoricalDataClient"):
+                return Trader(), mock_trading.return_value
+
+    def _order(self, symbol, side, qty=1.0, limit_price=None):
+        o = MagicMock()
+        o.symbol, o.side, o.qty, o.limit_price = symbol, side, qty, limit_price
+        return o
+
+    def test_returns_symbol_qty_limit_price_for_buys_only(self, order_trader):
+        from alpaca.trading.enums import OrderSide
+        t, mock_client = order_trader
+
+        buy = self._order("MSTR", OrderSide.BUY, qty=10, limit_price=350.5)
+        sell = self._order("TSLA", OrderSide.SELL, qty=5)
+        mock_client.get_orders.return_value = [buy, sell]
+
+        assert t.get_open_buy_orders() == [
+            {"symbol": "MSTR", "qty": 10.0, "limit_price": 350.5},
+        ]
+
+    def test_market_buy_order_has_no_limit_price(self, order_trader):
+        from alpaca.trading.enums import OrderSide
+        t, mock_client = order_trader
+
+        buy = self._order("QQQ", OrderSide.BUY, qty=3, limit_price=None)
+        mock_client.get_orders.return_value = [buy]
+
+        assert t.get_open_buy_orders() == [{"symbol": "QQQ", "qty": 3.0, "limit_price": None}]
+
+    def test_returns_empty_list_on_error(self, order_trader):
+        t, mock_client = order_trader
+        mock_client.get_orders.side_effect = RuntimeError("boom")
+        assert t.get_open_buy_orders() == []
 
 
 class TestEmergencyLiquidation:
@@ -780,12 +826,49 @@ class TestEmergencyLiquidation:
         results = t.execute_emergency_liquidation()
 
         mock_client.close_all_positions.assert_called_once_with(cancel_orders=True)
-        assert results == [{"symbol": "MSTR", "status": 200}]
+        assert results == [{"symbol": "MSTR", "status": 200, "ok": True}]
 
-    def test_error_returns_empty(self, liquidation_trader):
+    def test_reports_per_symbol_failure_not_ok(self, liquidation_trader):
+        """A per-symbol failure (e.g. status 500) must be visible to the
+        caller (Issue M1) - not silently reported as if it succeeded."""
+        from alpaca.trading.models import FailedClosePositionDetails
+
+        t, mock_client = liquidation_trader
+        failed = MagicMock()
+        failed.symbol, failed.status = "TSLA", 500
+        failed.body = FailedClosePositionDetails(code=40310000, message="insufficient qty available")
+        mock_client.close_all_positions.return_value = [failed]
+
+        results = t.execute_emergency_liquidation()
+
+        assert results == [{
+            "symbol": "TSLA", "status": 500, "ok": False,
+            "error": "insufficient qty available",
+        }]
+
+    def test_mixed_success_and_failure(self, liquidation_trader):
+        from alpaca.trading.models import FailedClosePositionDetails
+
+        t, mock_client = liquidation_trader
+        ok = MagicMock()
+        ok.symbol, ok.status = "MSTR", 200
+        bad = MagicMock()
+        bad.symbol, bad.status = "TSLA", 500
+        bad.body = FailedClosePositionDetails(code=40310000, message="boom")
+        mock_client.close_all_positions.return_value = [ok, bad]
+
+        results = t.execute_emergency_liquidation()
+
+        assert [r["ok"] for r in results] == [True, False]
+
+    def test_close_all_positions_exception_propagates(self, liquidation_trader):
+        """execute_emergency_liquidation() must not swallow a failure to even
+        attempt closing - a silent [] would look identical to "nothing was
+        held", which is indistinguishable from "liquidation never ran"."""
         t, mock_client = liquidation_trader
         mock_client.close_all_positions.side_effect = RuntimeError("boom")
-        assert t.execute_emergency_liquidation() == []
+        with pytest.raises(RuntimeError, match="boom"):
+            t.execute_emergency_liquidation()
 
 
 class TestClientOrderIdDedup:

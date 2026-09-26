@@ -82,6 +82,83 @@ class TestActionAndOrderType:
         assert decision["action"] == "buy"
 
 
+class TestBuyLimitPriceBand:
+    """buy の limit_price は現在値の ±10% を外れたら hold (H1)。
+
+    current_price=100.0 に合わせて stop_loss/take_profit も張り直す
+    （_buy() のデフォルトは current_price=350 前提の値のため）。
+    """
+
+    def _buy_at_100(self, **overrides):
+        return _buy(stop_loss=90.0, take_profit=120.0, **overrides)
+
+    def test_within_10pct_above_passes(self):
+        decision, reason = validate_decision(
+            self._buy_at_100(order_type="limit", limit_price=110.0), WATCHLIST, [], 100.0
+        )
+        assert reason is None
+        assert decision["action"] == "buy"
+
+    def test_within_10pct_below_passes(self):
+        decision, reason = validate_decision(
+            self._buy_at_100(order_type="limit", limit_price=95.0), WATCHLIST, [], 100.0
+        )
+        assert reason is None
+        assert decision["action"] == "buy"
+
+    def test_exactly_10pct_above_passes(self):
+        """境界ちょうど(+10%)は許可する。"""
+        decision, reason = validate_decision(
+            self._buy_at_100(order_type="limit", limit_price=110.0), WATCHLIST, [], 100.0
+        )
+        assert reason is None
+
+    def test_exactly_10pct_below_passes(self):
+        """境界ちょうど(-10%)は許可する。"""
+        decision, reason = validate_decision(
+            self._buy_at_100(order_type="limit", limit_price=90.0), WATCHLIST, [], 100.0
+        )
+        assert reason is None
+
+    def test_just_above_10pct_forces_hold(self):
+        decision, reason = validate_decision(
+            self._buy_at_100(order_type="limit", limit_price=110.01), WATCHLIST, [], 100.0
+        )
+        assert decision["action"] == "hold"
+        assert "±10%" in reason
+
+    def test_just_below_10pct_forces_hold(self):
+        decision, reason = validate_decision(
+            self._buy_at_100(order_type="limit", limit_price=89.99), WATCHLIST, [], 100.0
+        )
+        assert decision["action"] == "hold"
+        assert "±10%" in reason
+
+    def test_wildly_above_current_price_forces_hold(self):
+        """現在値 $100・指値 $500 のケース。"""
+        decision, reason = validate_decision(
+            self._buy_at_100(order_type="limit", limit_price=500.0), WATCHLIST, [], 100.0
+        )
+        assert decision["action"] == "hold"
+        assert "±10%" in reason
+
+    def test_market_order_is_not_subject_to_the_band(self):
+        """成行注文には limit_price 自体が無いので、このチェックの対象外。"""
+        decision, reason = validate_decision(
+            self._buy_at_100(order_type="market", limit_price=None), WATCHLIST, [], 100.0
+        )
+        assert reason is None
+        assert decision["action"] == "buy"
+
+    def test_sell_is_not_subject_to_the_band(self):
+        decision, reason = validate_decision(
+            _sell(order_type="limit", limit_price=500.0), WATCHLIST,
+            [{"symbol": "MSTR", "qty": 10}], current_price=100.0,
+        )
+        assert reason is None
+        assert decision["action"] == "sell"
+
+
 class TestSymbolRules:
     def test_buy_outside_watchlist_forces_hold(self):
         decision, reason = validate_decision(_buy(symbol="NVDA"), WATCHLIST, [], 350.0)

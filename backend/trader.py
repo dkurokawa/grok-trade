@@ -9,6 +9,7 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
+from alpaca.trading.models import FailedClosePositionDetails
 from alpaca.trading.requests import (
     LimitOrderRequest,
     MarketOrderRequest,
@@ -62,6 +63,29 @@ class Trader:
             "daily_pnl": float(account.equity or 0) - float(account.last_equity or 0),
         }
 
+    def get_open_buy_orders(self) -> list[dict]:
+        """未約定の「買い」注文一覧（symbol・qty・limit_price）。
+
+        総ポジション上限の計算 (RiskGuard.check()) は、これから約定するかも
+        しれない未約定の買い注文の想定額も新規発注と同様に「これから保有する
+        ことになりうる額」として含める必要がある - でないと、複数サイクルに
+        またがって未約定の買い注文を積み増すことで上限をすり抜けられてしまう。
+        """
+        try:
+            orders = self.trading_client.get_orders()
+            assert not isinstance(orders, dict)  # see get_account()
+            return [
+                {
+                    "symbol": o.symbol,
+                    "qty": float(o.qty) if o.qty else 0.0,
+                    "limit_price": float(o.limit_price) if o.limit_price else None,
+                }
+                for o in orders if o.side == OrderSide.BUY
+            ]
+        except Exception as e:
+            print(f"[Trader] Open buy orders error: {e}")
+            return []
+
     def get_open_buy_order_symbols(self) -> set:
         """未約定の「買い」注文が出ている銘柄。
 
@@ -69,13 +93,7 @@ class Trader:
         発注しても Alpaca に弾かれるだけになる。ブラケット注文の損切り・利確は
         売り注文として残り続けるので、買いだけを対象にする。
         """
-        try:
-            orders = self.trading_client.get_orders()
-            assert not isinstance(orders, dict)  # see get_account()
-            return {o.symbol for o in orders if o.side == OrderSide.BUY}
-        except Exception as e:
-            print(f"[Trader] Open orders error: {e}")
-            return set()
+        return {o["symbol"] for o in self.get_open_buy_orders()}
 
     def get_positions(self) -> list[dict]:
         """現在のポジション取得"""
@@ -237,16 +255,28 @@ class Trader:
 
         ブラケット注文の損切り・利確が保有株を押さえているため、先に未約定注文を
         取り消してから清算する（取り消さないと売り注文が拒否される）。
+
+        銘柄ごとの成否 (`ok`) をそのまま返す。close_all_positions() 自体の
+        呼び出しが失敗したら、その例外は握り潰さずそのまま呼び出し元
+        (trading_core.emergency_check) に伝える - ドローダウンを検知した後に
+        「清算したつもり」で空配列を返すのが最悪のシナリオなので、失敗を
+        隠さない。
         """
+        closed = self.trading_client.close_all_positions(cancel_orders=True)
+        assert not isinstance(closed, dict)  # see get_account()
+
         results = []
-        try:
-            closed = self.trading_client.close_all_positions(cancel_orders=True)
-            assert not isinstance(closed, dict)  # see get_account()
-            for r in closed:
-                results.append({"symbol": r.symbol, "status": r.status})
+        for r in closed:
+            ok = r.status is not None and 200 <= r.status < 300
+            entry: dict[str, Any] = {"symbol": r.symbol, "status": r.status, "ok": ok}
+            if not ok and isinstance(r.body, FailedClosePositionDetails):
+                entry["error"] = r.body.message
+            results.append(entry)
+            if ok:
                 print(f"[Trader] Emergency close: {r.symbol} (status {r.status})")
-        except Exception as e:
-            print(f"[Trader] Emergency liquidation error: {e}")
+            else:
+                print(f"[Trader] Emergency close FAILED: {r.symbol} "
+                      f"(status {r.status}): {entry.get('error', 'unknown')}")
         return results
 
     def get_order_status(self, order_id: str) -> dict | None:

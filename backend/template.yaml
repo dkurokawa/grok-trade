@@ -113,31 +113,36 @@ Resources:
         # 9:00-15:30 (the market doesn't open until 9:30 ET). Split into two
         # schedules since a single cron field can't express ":30 on the open
         # hour, :00 and :30 on every hour after" in one expression.
+        # Input carries EventBridge Scheduler's own <aws.scheduler.scheduled-time>
+        # (the intended fire time) so lambda_trading.handler can key the slot
+        # off that instead of "whenever this Lambda actually started" - a
+        # cold-start/queueing delay that crosses a slot boundary must not
+        # split one scheduled firing into two different slots/client_order_ids.
         TradingCycleOpen:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(30 9 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
-            Input: '{"task": "trading_cycle"}'
+            Input: '{"task": "trading_cycle", "scheduled_time": "<aws.scheduler.scheduled-time>"}'
         TradingCycle:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0,30 10-15 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
-            Input: '{"task": "trading_cycle"}'
+            Input: '{"task": "trading_cycle", "scheduled_time": "<aws.scheduler.scheduled-time>"}'
         # 9:30-15:55, every 5 min - same reasoning, split for the same reason.
         EmergencyCheckOpen:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(30,35,40,45,50,55 9 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
-            Input: '{"task": "emergency_check"}'
+            Input: '{"task": "emergency_check", "scheduled_time": "<aws.scheduler.scheduled-time>"}'
         EmergencyCheck:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0/5 10-15 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
-            Input: '{"task": "emergency_check"}'
+            Input: '{"task": "emergency_check", "scheduled_time": "<aws.scheduler.scheduled-time>"}'
     Metadata:
       BuildMethod: makefile   # cross-compiles Linux wheels without Docker
 
@@ -169,7 +174,7 @@ Resources:
 
 Outputs:
   ApiUrl:
-    Description: Function URL for the dashboard API (set as NEXT_PUBLIC_API_URL).
+    Description: Function URL for the dashboard API (set as the dashboard's server-only API_URL - never NEXT_PUBLIC_).
     Value: !GetAtt ApiFunctionUrl.FunctionUrl
   TableName:
     Value: !Ref TableName

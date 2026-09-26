@@ -11,6 +11,19 @@ class RiskCheckResult:
     adjustments: list[dict] = field(default_factory=list)
 
 
+def effective_buy_price(price: float, order_type: str, limit_price: float | None) -> float:
+    """買いの株数・総ポジション額の計算に使う「実効価格」。
+
+    成行なら現在値。指値なら max(現在値, limit_price) - 指値が現在値より高ければ
+    その価格で約定し得るのでその価格を、現在値より低ければ現在値のほうが保守的
+    （高い方が exposure を大きく見積もる）なのでそちらを使う。指値が現在値より
+    低くても現在値を下限にすることで、株数上限・総ポジション上限を過小評価しない。
+    """
+    if order_type == "limit" and limit_price and limit_price > 0:
+        return max(price, limit_price)
+    return price
+
+
 class RiskGuard:
     def __init__(self) -> None:
         self.max_daily_loss = float(os.getenv("MAX_DAILY_LOSS", "500"))
@@ -93,7 +106,13 @@ class RiskGuard:
         if not price or price <= 0 or not equity or equity <= 0:
             return RiskCheckResult(allowed=False, reason="no_price", adjustments=adjustments)
 
-        max_qty = math.floor(equity * pct / 100 / price)
+        # 指値なら現在値と指値の高い方を使う（低く見積もって株数上限を
+        # すり抜けさせない）。成行ならそのまま現在値。
+        effective_price = effective_buy_price(
+            price, decision.get("order_type", "market"), decision.get("limit_price")
+        )
+
+        max_qty = math.floor(equity * pct / 100 / effective_price)
         requested_qty = decision.get("quantity", 0) or 0
         quantity = min(requested_qty, max_qty)
         if quantity < requested_qty:
@@ -108,10 +127,16 @@ class RiskGuard:
         if quantity == 0:
             return RiskCheckResult(allowed=False, reason="quantity_rounds_to_zero", adjustments=adjustments)
 
-        # 7. 保有合計 + 新規発注が総資産の上限を超えないか（旧 check_order() 相当）
+        # 7. 保有合計 + 未約定の買い注文 + 新規発注が総資産の上限を超えないか
+        # （旧 check_order() 相当。未約定注文分は M2 で追加 - これを含めないと、
+        # 複数サイクルにまたがって未約定の買い注文を積み増すことで上限を
+        # すり抜けられる）。
         current_positions = portfolio.get("positions", [])
-        order_value = quantity * price
-        total_position_value = sum(p.get("market_value", 0) for p in current_positions)
+        open_buy_order_value = portfolio.get("open_buy_order_value", 0)
+        order_value = quantity * effective_price
+        total_position_value = (
+            sum(p.get("market_value", 0) for p in current_positions) + open_buy_order_value
+        )
         new_ratio = (total_position_value + order_value) / equity
         max_ratio = self.max_position_pct / 100
         if new_ratio > max_ratio:

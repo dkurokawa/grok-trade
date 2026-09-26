@@ -28,23 +28,42 @@ from discord_notifier import DiscordNotifier
 from grok_client import NO_PREVIOUS_SENTIMENT, GrokClient
 from grok_validator import validate_grok_report
 from opus_client import OpusClient
-from risk_guard import RiskGuard
+from risk_guard import RiskGuard, effective_buy_price
 from skip_logic import should_skip_opus
 from trader import DuplicateOrderError, Trader
 
 NY_TZ = pytz.timezone("America/New_York")
 
 
-def _slot_id(interval_minutes: int) -> str:
-    """Floor the current New York time to an `interval_minutes` boundary.
+def _resolve_now(scheduled_time: str | None) -> datetime:
+    """The time to key the slot off: EventBridge Scheduler's own
+    <aws.scheduler.scheduled-time> (the intended fire time, ISO 8601 UTC)
+    when the event carries one, otherwise the actual current time.
+
+    Using the scheduled time rather than "whenever this Lambda happened to
+    start" means a slot boundary being crossed by cold-start/queueing delay
+    can't split one scheduled firing into two different slots (and two
+    different client_order_ids). A manually-invoked event (no scheduled_time)
+    has no such intended time, so it falls back to now.
+    """
+    if scheduled_time:
+        try:
+            return datetime.fromisoformat(scheduled_time)
+        except ValueError as e:
+            print(f"[Scheduler] Could not parse scheduled_time={scheduled_time!r}: {e}")
+    return datetime.now(NY_TZ)
+
+
+def _slot_id(interval_minutes: int, now: datetime) -> str:
+    """Floor `now` (tz-aware) to an `interval_minutes` boundary, New York time.
 
     Used as the DynamoDB lock key (and the Alpaca client_order_id) so that a
     duplicate/retried invocation for the same scheduled slot is recognisable
     as "the same slot" regardless of which Lambda instance runs it.
     """
-    now = datetime.now(NY_TZ)
-    floored_minute = (now.minute // interval_minutes) * interval_minutes
-    slot_time = now.replace(minute=floored_minute, second=0, microsecond=0)
+    now_ny = now.astimezone(NY_TZ)
+    floored_minute = (now_ny.minute // interval_minutes) * interval_minutes
+    slot_time = now_ny.replace(minute=floored_minute, second=0, microsecond=0)
     return slot_time.strftime("%Y%m%dT%H%M")
 
 # Clients are built on first use rather than at import: Alpaca and the model
@@ -158,8 +177,12 @@ async def _alert_startup_failure(job: str, error: Exception) -> None:
         print(f"[Discord] Startup failure alert failed: {e}")
 
 
-async def trading_cycle() -> None:
-    """メイン取引サイクル（30分ごと・4ステージパイプライン）"""
+async def trading_cycle(scheduled_time: str | None = None) -> None:
+    """メイン取引サイクル（30分ごと・4ステージパイプライン）
+
+    scheduled_time: EventBridge Scheduler の <aws.scheduler.scheduled-time>
+    （lambda_trading.handler がイベントから渡す）。手動実行では None。
+    """
     # _ready() constructs the API clients, which raise on missing/invalid keys.
     # Outside this try, such a failure would end the cycle with no alert at all.
     try:
@@ -174,7 +197,7 @@ async def trading_cycle() -> None:
     # rejected here instead of running the pipeline - and placing orders -
     # twice. A cycle that throws after claiming the lock is not retried by
     # design: the scheduler's own retry would be blocked by this same lock.
-    slot = _slot_id(30)
+    slot = _slot_id(30, _resolve_now(scheduled_time))
     if not acquire_lock("trading", slot):
         print(f"[Lock] Trading cycle for slot {slot} already handled - skipping")
         return
@@ -321,9 +344,23 @@ async def trading_cycle() -> None:
         # than trust the AI's requested quantity at face value.
         symbol = decision.get("symbol")
         price = market_data.get(symbol, {}).get("price", 0) if symbol else 0
+
+        # 未約定の買い注文の想定額（total position ratio に含める。M2）。
+        # 複数サイクルにまたがって未約定の買い注文を積み増すことで総ポジション
+        # 上限をすり抜けられないようにする。buy 判断のときだけ取得する。
+        open_buy_order_value = 0.0
+        if decision["action"] == "buy":
+            for o in _trader.get_open_buy_orders():
+                order_price = o["limit_price"] or market_data.get(o["symbol"], {}).get("price", 0)
+                open_buy_order_value += o["qty"] * order_price
+
         rg_result = _guard.check(
             decision,
-            {"daily_pnl": daily_pnl, "positions": positions},
+            {
+                "daily_pnl": daily_pnl,
+                "positions": positions,
+                "open_buy_order_value": open_buy_order_value,
+            },
             price=price,
             equity=account["equity"],
         )
@@ -374,11 +411,16 @@ async def trading_cycle() -> None:
         if decision["action"] == "buy":
             skip_reason = None
             buying_power = account.get("buying_power", account["cash"])
+            # 指値なら現在値と指値の高い方を使う（risk_guard.check() と同じ
+            # 実効価格 - 低く見積もって買付余力チェックをすり抜けさせない）。
+            effective_price = effective_buy_price(
+                price, decision.get("order_type", "market"), decision.get("limit_price")
+            )
             if symbol in _trader.get_open_buy_order_symbols():
                 skip_reason = "open_buy_order_pending"
-            elif price and decision["quantity"] * price > buying_power:
+            elif effective_price and decision["quantity"] * effective_price > buying_power:
                 skip_reason = (
-                    f"insufficient_buying_power: need ${decision['quantity'] * price:,.2f}, "
+                    f"insufficient_buying_power: need ${decision['quantity'] * effective_price:,.2f}, "
                     f"have ${buying_power:,.2f}"
                 )
             if skip_reason:
@@ -484,8 +526,20 @@ async def trading_cycle() -> None:
         raise
 
 
-async def emergency_check() -> None:
-    """5分間隔でドローダウン監視（AI不要・一時停止中でも動く）"""
+class EmergencyLiquidationFailed(Exception):
+    """execute_emergency_liquidation() raised, or reported a per-symbol
+    failure. emergency_check() always re-raises this (unlike other
+    unexpected errors in that function, which are still swallowed) so it
+    reaches CloudWatch as a Lambda error - a failed emergency liquidation
+    must never look like a normal, uneventful run.
+    """
+
+
+async def emergency_check(scheduled_time: str | None = None) -> None:
+    """5分間隔でドローダウン監視（AI不要・一時停止中でも動く）
+
+    scheduled_time: trading_cycle() と同じ（EventBridge の scheduled-time）。
+    """
     try:
         if not _emergency_ready():
             return
@@ -493,7 +547,7 @@ async def emergency_check() -> None:
         await _alert_startup_failure("Emergency check", e)
         return
 
-    slot = _slot_id(5)
+    slot = _slot_id(5, _resolve_now(scheduled_time))
     if not acquire_lock("emergency", slot):
         print(f"[Lock] Emergency check for slot {slot} already handled - skipping")
         return
@@ -512,11 +566,43 @@ async def emergency_check() -> None:
             drawdown_pct = ((last_equity - equity) / last_equity) * 100
             if drawdown_pct > 5:
                 print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5% → liquidating")
-                _trader.execute_emergency_liquidation()
-                await _notifier.send_pipeline_log("EMERGENCY", "risk_guard", {
-                    "passed": False,
-                    "reason": f"EMERGENCY STOP: drawdown {drawdown_pct:.1f}%",
-                })
+
+                liquidation_error: Exception | None = None
+                results: list[dict] = []
+                try:
+                    results = _trader.execute_emergency_liquidation()
+                except Exception as e:  # noqa: BLE001
+                    liquidation_error = e
+
+                failed = [r for r in results if not r.get("ok", True)]
+                reason = f"EMERGENCY STOP: drawdown {drawdown_pct:.1f}%"
+                if liquidation_error or failed:
+                    reason += " - LIQUIDATION FAILED, see error alert"
+
+                try:
+                    await _notifier.send_pipeline_log("EMERGENCY", "risk_guard", {
+                        "passed": False,
+                        "reason": reason,
+                    })
+                except Exception as e:
+                    print(f"[Discord] Emergency log failed: {e}")
+
+                # ドローダウンを検知した以上、清算の成否に関わらず以降の
+                # 自動取引は止める（部分的にしか清算できていない状態で
+                # 取引を再開するのが最悪のシナリオ）。
                 set_scheduler_state(False)
+
+                if liquidation_error or failed:
+                    if liquidation_error:
+                        detail = str(liquidation_error)
+                    else:
+                        detail = "; ".join(
+                            f"{r['symbol']}: {r.get('error', r['status'])}" for r in failed
+                        )
+                    print(f"[EMERGENCY] Liquidation failed: {detail}")
+                    await _notifier.notify_alert(f"Emergency liquidation failed: {detail}", "error")
+                    raise EmergencyLiquidationFailed(detail)
+    except EmergencyLiquidationFailed:
+        raise
     except Exception as e:
         print(f"[Emergency] Check failed: {e}")

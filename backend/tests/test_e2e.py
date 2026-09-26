@@ -654,6 +654,57 @@ class TestDuplicateSlotLock:
         assert mock_log_pipeline.call_args.kwargs["execution_result"] == {"skipped": "duplicate_order"}
 
 
+class TestScheduledTimeDrivesTheSlot:
+    """The Alpaca client_order_id (and the DynamoDB lock) must be derived
+    from EventBridge's scheduled_time, not whenever the Lambda actually
+    executed (Issue M3) - otherwise a delayed invocation could compute a
+    different slot than the scheduler intended, defeating dedup."""
+
+    @pytest.mark.asyncio
+    async def test_client_order_id_uses_scheduled_time(self):
+        mock_trader = MagicMock()
+        mock_trader.get_account.return_value = {
+            "cash": 100000.0, "portfolio_value": 100000.0,
+            "buying_power": 200000.0, "equity": 100000.0,
+            "last_equity": 100000.0, "daily_pnl": 0.0,
+        }
+        mock_trader.get_positions.return_value = []
+        mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
+        mock_trader.get_open_buy_orders.return_value = []
+        mock_trader.get_open_buy_order_symbols.return_value = set()
+        mock_trader.execute_order.return_value = {"order_id": "order-1", "status": "filled"}
+
+        mock_grok = MagicMock()
+        mock_grok.collect_market_report.return_value = (make_mock_grok_report(), 100)
+
+        mock_opus = MagicMock()
+        mock_opus.analyze.return_value = (make_mock_opus_decision(action="buy"), 600)
+
+        mock_notifier = MagicMock()
+        mock_notifier.notify_alert = AsyncMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"), \
+             patch("trading_core.acquire_lock", return_value=True):
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+            mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
+            mock_guard.max_daily_loss = 500
+
+            from trading_core import trading_cycle
+            # 09:30:00 ET on a real slot boundary - the actual wall-clock
+            # time when this test runs is irrelevant to the resulting slot.
+            await trading_cycle(scheduled_time="2026-06-01T13:30:00Z")
+
+        client_order_id = mock_trader.execute_order.call_args.kwargs["client_order_id"]
+        assert client_order_id == "gt-20260601T0930-MSTR-buy"
+
+
 class TestDecisionValidationInPipeline:
     """decision_schema.validate_decision is wired in ahead of RiskGuard/Alpaca
     (Issue #5): an invalid AI decision must never reach either."""
