@@ -1,6 +1,12 @@
 # Grok Trade Bot
 
+[![CI/CD](https://github.com/dkurokawa/grok-trade/actions/workflows/ci.yml/badge.svg)](https://github.com/dkurokawa/grok-trade/actions/workflows/ci.yml)
+
 Grok と Claude Opus を組み合わせた自動株式トレーディングボット。Alpaca API でペーパートレード/本番取引を行い、Discord に通知を送信。
+
+> **ペーパートレード専用。投資助言ではない。** 既定は Alpaca のペーパートレード口座（`ALPACA_PAPER=true`）であり、
+> このリポジトリのコード・設定・ドキュメントのいずれも特定の銘柄の売買を推奨するものではない。
+> 本番口座（`ALPACA_PAPER=false`）で動かした場合の結果について作者は責任を負わない。
 
 ## アーキテクチャ
 

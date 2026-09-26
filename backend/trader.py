@@ -30,7 +30,7 @@ class DuplicateOrderError(Exception):
 
 
 class Trader:
-    def __init__(self):
+    def __init__(self) -> None:
         api_key = os.getenv("ALPACA_API_KEY")
         secret_key = os.getenv("ALPACA_SECRET_KEY")
         paper = os.getenv("ALPACA_PAPER", "true").lower() == "true"
@@ -46,13 +46,20 @@ class Trader:
     def get_account(self) -> dict:
         """アカウント情報取得"""
         account = self.trading_client.get_account()
+        # The SDK's return type is a Union with a raw dict for when the
+        # client is constructed with raw_data=True; we never do that, so
+        # this always holds at runtime. Narrows the type for mypy.
+        assert not isinstance(account, dict)
+        # Alpaca's model types these fields as Optional (the API schema allows
+        # it), but a real account response always populates them; `or 0`
+        # covers a not-really-expected None instead of crashing on it.
         return {
-            "cash": float(account.cash),
-            "portfolio_value": float(account.portfolio_value),
-            "buying_power": float(account.buying_power),
-            "equity": float(account.equity),
-            "last_equity": float(account.last_equity),
-            "daily_pnl": float(account.equity) - float(account.last_equity),
+            "cash": float(account.cash or 0),
+            "portfolio_value": float(account.portfolio_value or 0),
+            "buying_power": float(account.buying_power or 0),
+            "equity": float(account.equity or 0),
+            "last_equity": float(account.last_equity or 0),
+            "daily_pnl": float(account.equity or 0) - float(account.last_equity or 0),
         }
 
     def get_open_buy_order_symbols(self) -> set:
@@ -63,10 +70,9 @@ class Trader:
         売り注文として残り続けるので、買いだけを対象にする。
         """
         try:
-            return {
-                o.symbol for o in self.trading_client.get_orders()
-                if o.side == OrderSide.BUY
-            }
+            orders = self.trading_client.get_orders()
+            assert not isinstance(orders, dict)  # see get_account()
+            return {o.symbol for o in orders if o.side == OrderSide.BUY}
         except Exception as e:
             print(f"[Trader] Open orders error: {e}")
             return set()
@@ -74,14 +80,15 @@ class Trader:
     def get_positions(self) -> list[dict]:
         """現在のポジション取得"""
         positions = self.trading_client.get_all_positions()
+        assert not isinstance(positions, dict)  # see get_account()
         return [
             {
                 "symbol": p.symbol,
                 "qty": float(p.qty),
                 "avg_entry_price": float(p.avg_entry_price),
-                "market_value": float(p.market_value),
-                "unrealized_pl": float(p.unrealized_pl),
-                "unrealized_plpc": float(p.unrealized_plpc),
+                "market_value": float(p.market_value or 0),
+                "unrealized_pl": float(p.unrealized_pl or 0),
+                "unrealized_plpc": float(p.unrealized_plpc or 0),
             }
             for p in positions
         ]
@@ -101,6 +108,7 @@ class Trader:
 
         try:
             bars = self.data_client.get_stock_bars(request)
+            assert not isinstance(bars, dict)  # see get_account()
             result = {}
 
             for symbol in symbols:
@@ -191,12 +199,18 @@ class Trader:
                 )
 
             order = self.trading_client.submit_order(order_request)
+            assert not isinstance(order, dict)  # see get_account()
+            # side/type/qty are typed Optional in the SDK (the API schema
+            # allows it), but Alpaca always echoes back what we just
+            # submitted with an explicit side/type/qty.
+            assert order.side is not None
+            assert order.type is not None
 
             result = {
                 "order_id": str(order.id),
                 "symbol": order.symbol,
                 "side": order.side.value,
-                "qty": float(order.qty),
+                "qty": float(order.qty or 0),
                 "type": order.type.value,
                 "status": order.status.value,
                 "submitted_at": str(order.submitted_at),
@@ -226,7 +240,9 @@ class Trader:
         """
         results = []
         try:
-            for r in self.trading_client.close_all_positions(cancel_orders=True):
+            closed = self.trading_client.close_all_positions(cancel_orders=True)
+            assert not isinstance(closed, dict)  # see get_account()
+            for r in closed:
                 results.append({"symbol": r.symbol, "status": r.status})
                 print(f"[Trader] Emergency close: {r.symbol} (status {r.status})")
         except Exception as e:
@@ -237,6 +253,7 @@ class Trader:
         """注文ステータス確認"""
         try:
             order = self.trading_client.get_order_by_id(order_id)
+            assert not isinstance(order, dict)  # see get_account()
             return {
                 "order_id": str(order.id),
                 "status": order.status.value,

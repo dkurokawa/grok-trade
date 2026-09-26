@@ -38,6 +38,11 @@ exclude = [
     ".venv/",
 ]
 
+# 取引経路（判断→検証→執行）は他より厳しく: 関数の引数・戻り値の型注釈を必須にする。
+[[tool.mypy.overrides]]
+module = ["trading_core", "risk_guard", "decision_schema", "trader"]
+disallow_untyped_defs = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

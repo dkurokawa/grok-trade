@@ -12,7 +12,7 @@ class RiskCheckResult:
 
 
 class RiskGuard:
-    def __init__(self):
+    def __init__(self) -> None:
         self.max_daily_loss = float(os.getenv("MAX_DAILY_LOSS", "500"))
         self.max_position_pct = float(os.getenv("MAX_POSITION_RATIO", "0.5")) * 100  # 50%
         self.max_single_trade_pct = float(os.getenv("MAX_SINGLE_TRADE_PCT", "0.25")) * 100  # 25%

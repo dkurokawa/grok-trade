@@ -17,6 +17,7 @@ Both return the same TradeDecision shape, so Risk Guard and execution are shared
 import os
 import uuid
 from datetime import datetime
+from typing import Any
 
 import pytz
 
@@ -56,7 +57,7 @@ trader = None
 notifier = None
 
 
-def _init_clients():
+def _init_clients() -> None:
     """Construct the API clients once per warm container."""
     global grok, opus, guard, trader, notifier
     if grok is None:
@@ -146,7 +147,7 @@ def _emergency_ready() -> bool:
     return True
 
 
-async def _alert_startup_failure(job: str, error: Exception):
+async def _alert_startup_failure(job: str, error: Exception) -> None:
     """_ready() raised, so `notifier` may not have been constructed yet."""
     print(f"[Error] {job} startup failed: {error}")
     try:
@@ -157,7 +158,7 @@ async def _alert_startup_failure(job: str, error: Exception):
         print(f"[Discord] Startup failure alert failed: {e}")
 
 
-async def trading_cycle():
+async def trading_cycle() -> None:
     """メイン取引サイクル（30分ごと・4ステージパイプライン）"""
     # _ready() constructs the API clients, which raise on missing/invalid keys.
     # Outside this try, such a failure would end the cycle with no alert at all.
@@ -178,6 +179,14 @@ async def trading_cycle():
         print(f"[Lock] Trading cycle for slot {slot} already handled - skipping")
         return
 
+    # _ready() succeeded, so these are all constructed; bind to locals (typed,
+    # narrowed) rather than re-checking the module globals at every call site.
+    assert grok is not None
+    assert guard is not None
+    assert trader is not None
+    assert notifier is not None
+    _grok, _guard, _trader, _notifier = grok, guard, trader, notifier
+
     cycle_id = f"{slot}-{uuid.uuid4().hex[:8]}"
     engine = decision_engine()
     print(f"\n{'='*50}")
@@ -186,27 +195,27 @@ async def trading_cycle():
 
     try:
         # === アカウント・市場データ取得 ===
-        account = trader.get_account()
-        positions = trader.get_positions()
+        account = _trader.get_account()
+        positions = _trader.get_positions()
         daily_pnl = account["daily_pnl"]
 
         print(f"Cash: ${account['cash']:,.2f} | Daily P&L: ${daily_pnl:+,.2f} | Positions: {len(positions)}")
 
         # システム健全性チェック
-        health = guard.check_system_health(daily_pnl)
+        health = _guard.check_system_health(daily_pnl)
         if not health.allowed:
             print(f"[RiskGuard] System stopped: {health.reason}")
-            await notifier.notify_system_stop(health.reason)
+            await _notifier.notify_system_stop(health.reason or "unknown")
             try:
                 set_scheduler_state(False)  # 以降のサイクルを停止
             except Exception as e:
                 # The flag write failed, so the next cycle might not see the
                 # stop - but this cycle still must not trade (return below).
                 print(f"[DB] Failed to persist stop flag: {e}")
-                await notifier.notify_alert(f"Failed to persist stop flag: {e}", "error")
+                await _notifier.notify_alert(f"Failed to persist stop flag: {e}", "error")
             return
 
-        market_data = trader.get_market_data(WATCHLIST)
+        market_data = _trader.get_market_data(WATCHLIST)
         if not market_data:
             print("[Trader] No market data available")
             return
@@ -214,7 +223,7 @@ async def trading_cycle():
         # === Stage 1: Grok 情報収集 ===
         # Grok は前回の呼び出しを覚えていないので、比較材料を明示的に渡す。
         previous_sentiment = _previous_sentiment_summary()
-        grok_report, grok_latency = grok.collect_market_report(
+        grok_report, grok_latency = _grok.collect_market_report(
             market_data=market_data,
             positions=positions,
             previous_sentiment=previous_sentiment,
@@ -226,7 +235,7 @@ async def trading_cycle():
 
         grok_report = validate_grok_report(grok_report)
         try:
-            await notifier.send_pipeline_log(cycle_id, "grok", grok_report)
+            await _notifier.send_pipeline_log(cycle_id, "grok", grok_report)
         except Exception as e:
             print(f"[Discord] Grok log failed: {e}")
 
@@ -235,7 +244,7 @@ async def trading_cycle():
               f"Latency: {grok_latency}ms")
 
         # ログ共通項目
-        base = {
+        base: dict[str, Any] = {
             "cycle_id": cycle_id,
             "decision_engine": engine,
             "grok_input": {"market_data": market_data},
@@ -247,19 +256,23 @@ async def trading_cycle():
         if should_skip_opus(grok_report):
             print(f"[Skip] No significant change → {engine} decision skipped")
             try:
-                await notifier.send_pipeline_log(cycle_id, "skip", {})
+                await _notifier.send_pipeline_log(cycle_id, "skip", {})
             except Exception as e:
                 print(f"[Discord] Skip log failed: {e}")
             log_pipeline(**base, opus_skipped=True)
             return
 
         # === Stage 2: 売買判断（Grok または Opus） ===
-        decide = opus.analyze if engine == "opus" else grok.decide
+        if engine == "opus":
+            assert opus is not None  # _init_clients() constructs it when engine == "opus"
+            decide = opus.analyze
+        else:
+            decide = _grok.decide
         decision, decision_latency = decide(
             balance=account["cash"],
             positions=positions,
             daily_pnl=daily_pnl,
-            max_daily_loss=guard.max_daily_loss,
+            max_daily_loss=_guard.max_daily_loss,
             price_data=market_data,
             grok_report=grok_report,
         )
@@ -281,13 +294,13 @@ async def trading_cycle():
         if invalid_reason:
             print(f"[Validate] Decision failed validation, forcing hold: {invalid_reason}")
             try:
-                await notifier.notify_alert(f"Decision validation failed: {invalid_reason}", "warning")
+                await _notifier.notify_alert(f"Decision validation failed: {invalid_reason}", "warning")
             except Exception as e:
                 print(f"[Discord] Validation warning failed: {e}")
 
         decision["decision_engine"] = engine
         try:
-            await notifier.send_pipeline_log(cycle_id, "opus_decision", decision)
+            await _notifier.send_pipeline_log(cycle_id, "opus_decision", decision)
         except Exception as e:
             print(f"[Discord] Decision log failed: {e}")
 
@@ -308,7 +321,7 @@ async def trading_cycle():
         # than trust the AI's requested quantity at face value.
         symbol = decision.get("symbol")
         price = market_data.get(symbol, {}).get("price", 0) if symbol else 0
-        rg_result = guard.check(
+        rg_result = _guard.check(
             decision,
             {"daily_pnl": daily_pnl, "positions": positions},
             price=price,
@@ -317,7 +330,7 @@ async def trading_cycle():
 
         if rg_result.adjustments:
             try:
-                await notifier.send_pipeline_log(cycle_id, "risk_guard", {
+                await _notifier.send_pipeline_log(cycle_id, "risk_guard", {
                     "passed": True, "adjustments": rg_result.adjustments,
                 })
             except Exception as e:
@@ -326,7 +339,7 @@ async def trading_cycle():
 
         if not rg_result.allowed:
             try:
-                await notifier.send_pipeline_log(cycle_id, "risk_guard", {
+                await _notifier.send_pipeline_log(cycle_id, "risk_guard", {
                     "passed": False, "reason": rg_result.reason,
                 })
             except Exception as e:
@@ -352,13 +365,16 @@ async def trading_cycle():
             return
 
         # symbol/price were already resolved before Stage 3 for RiskGuard.check().
+        # decision_schema guarantees a symbol for buy/sell (hold, handled
+        # above, is the only action allowed to omit it).
+        assert symbol is not None
 
         # 発注前の前提チェック（買いのみ）。どちらも満たさない注文は Alpaca に
         # 必ず拒否され、30分ごとに失敗通知が飛び続けるだけになる。
         if decision["action"] == "buy":
             skip_reason = None
             buying_power = account.get("buying_power", account["cash"])
-            if symbol in trader.get_open_buy_order_symbols():
+            if symbol in _trader.get_open_buy_order_symbols():
                 skip_reason = "open_buy_order_pending"
             elif price and decision["quantity"] * price > buying_power:
                 skip_reason = (
@@ -377,7 +393,7 @@ async def trading_cycle():
                 return
 
         try:
-            order = trader.execute_order(
+            order = _trader.execute_order(
                 symbol=symbol,
                 action=decision["action"],
                 quantity=decision["quantity"],
@@ -408,7 +424,7 @@ async def trading_cycle():
                 "status": order["status"],
             }
             try:
-                await notifier.send_pipeline_log(cycle_id, "execution", exec_result)
+                await _notifier.send_pipeline_log(cycle_id, "execution", exec_result)
             except Exception as e:
                 print(f"[Discord] Execution log failed: {e}")
             print(f"[Order] {order['order_id']} | Status: {order['status']}")
@@ -438,7 +454,7 @@ async def trading_cycle():
             # order itself - not the same as a submit failure (order is None
             # below), but still not a trade: don't record it in `trades`.
             print(f"[Order] {symbol} {order['status']}: {order['order_id']}")
-            await notifier.notify_alert(f"Order {order['status']}: {symbol}", "error")
+            await _notifier.notify_alert(f"Order {order['status']}: {symbol}", "error")
             log_pipeline(
                 **base,
                 rg_passed=True,
@@ -449,7 +465,7 @@ async def trading_cycle():
             )
         else:
             print("[Order] Failed to execute")
-            await notifier.notify_alert(f"Order failed: {symbol}", "error")
+            await _notifier.notify_alert(f"Order failed: {symbol}", "error")
             log_pipeline(
                 **base,
                 rg_passed=True,
@@ -459,7 +475,7 @@ async def trading_cycle():
 
     except Exception as e:
         print(f"[Error] Trading cycle failed: {e}")
-        await notifier.notify_alert(f"Trading error: {e}", "error")
+        await _notifier.notify_alert(f"Trading error: {e}", "error")
         # Re-raise (Issue #9) so the Lambda invocation itself is reported as
         # failed (CloudWatch Errors metric) instead of a swallowed exception
         # silently looking like a normal, uneventful run. The slot lock
@@ -468,7 +484,7 @@ async def trading_cycle():
         raise
 
 
-async def emergency_check():
+async def emergency_check() -> None:
     """5分間隔でドローダウン監視（AI不要・一時停止中でも動く）"""
     try:
         if not _emergency_ready():
@@ -482,8 +498,13 @@ async def emergency_check():
         print(f"[Lock] Emergency check for slot {slot} already handled - skipping")
         return
 
+    # _emergency_ready() succeeded, so these are constructed.
+    assert trader is not None
+    assert notifier is not None
+    _trader, _notifier = trader, notifier
+
     try:
-        account = trader.get_account()
+        account = _trader.get_account()
         equity = account["equity"]
         last_equity = account["last_equity"]
 
@@ -491,8 +512,8 @@ async def emergency_check():
             drawdown_pct = ((last_equity - equity) / last_equity) * 100
             if drawdown_pct > 5:
                 print(f"[EMERGENCY] Drawdown {drawdown_pct:.1f}% > 5% → liquidating")
-                trader.execute_emergency_liquidation()
-                await notifier.send_pipeline_log("EMERGENCY", "risk_guard", {
+                _trader.execute_emergency_liquidation()
+                await _notifier.send_pipeline_log("EMERGENCY", "risk_guard", {
                     "passed": False,
                     "reason": f"EMERGENCY STOP: drawdown {drawdown_pct:.1f}%",
                 })
