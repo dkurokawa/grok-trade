@@ -1,5 +1,6 @@
 """Data layer (DynamoDB, single-table, on-demand)."""
 from .dynamo import (
+    acquire_lock,
     get_decisions,
     get_pipeline_logs,
     get_scheduler_state,
@@ -17,4 +18,5 @@ __all__ = [
     "get_pipeline_logs",
     "get_scheduler_state",
     "set_scheduler_state",
+    "acquire_lock",
 ]

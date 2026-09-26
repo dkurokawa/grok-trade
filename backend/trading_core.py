@@ -16,15 +16,32 @@ Both return the same TradeDecision shape, so Risk Guard and execution are shared
 import uuid
 from datetime import datetime
 
+import pytz
+
 from config import decision_engine, missing_required
-from db import get_scheduler_state, log_pipeline, log_trade, set_scheduler_state
+from db import acquire_lock, get_scheduler_state, log_pipeline, log_trade, set_scheduler_state
 from discord_notifier import DiscordNotifier
 from grok_client import GrokClient
 from grok_validator import validate_grok_report
 from opus_client import OpusClient
 from risk_guard import RiskGuard
 from skip_logic import should_skip_opus
-from trader import Trader
+from trader import DuplicateOrderError, Trader
+
+NY_TZ = pytz.timezone("America/New_York")
+
+
+def _slot_id(interval_minutes: int) -> str:
+    """Floor the current New York time to an `interval_minutes` boundary.
+
+    Used as the DynamoDB lock key (and the Alpaca client_order_id) so that a
+    duplicate/retried invocation for the same scheduled slot is recognisable
+    as "the same slot" regardless of which Lambda instance runs it.
+    """
+    now = datetime.now(NY_TZ)
+    floored_minute = (now.minute // interval_minutes) * interval_minutes
+    slot_time = now.replace(minute=floored_minute, second=0, microsecond=0)
+    return slot_time.strftime("%Y%m%dT%H%M")
 
 # Clients are built on first use rather than at import: Alpaca and the model
 # SDKs raise when their keys are absent, and failing at import turns a
@@ -92,10 +109,20 @@ async def trading_cycle():
         await _alert_startup_failure("Trading cycle", e)
         return
 
-    cycle_id = str(uuid.uuid4())
+    # Claim this 30-min slot before doing anything else. A retried/duplicate
+    # EventBridge invocation (or a manual re-run) for the same slot is
+    # rejected here instead of running the pipeline - and placing orders -
+    # twice. A cycle that throws after claiming the lock is not retried by
+    # design: the scheduler's own retry would be blocked by this same lock.
+    slot = _slot_id(30)
+    if not acquire_lock("trading", slot):
+        print(f"[Lock] Trading cycle for slot {slot} already handled - skipping")
+        return
+
+    cycle_id = f"{slot}-{uuid.uuid4().hex[:8]}"
     engine = decision_engine()
     print(f"\n{'='*50}")
-    print(f"[{datetime.now()}] Cycle {cycle_id[:8]} started (decision engine: {engine})")
+    print(f"[{datetime.now()}] Cycle {cycle_id} started (decision engine: {engine})")
     print("=" * 50)
 
     try:
@@ -271,15 +298,31 @@ async def trading_cycle():
                 )
                 return
 
-        order = trader.execute_order(
-            symbol=symbol,
-            action=decision["action"],
-            quantity=decision["quantity"],
-            order_type=decision.get("order_type", "market"),
-            limit_price=decision.get("limit_price"),
-            stop_loss=decision.get("stop_loss"),
-            take_profit=decision.get("take_profit"),
-        )
+        try:
+            order = trader.execute_order(
+                symbol=symbol,
+                action=decision["action"],
+                quantity=decision["quantity"],
+                order_type=decision.get("order_type", "market"),
+                limit_price=decision.get("limit_price"),
+                stop_loss=decision.get("stop_loss"),
+                take_profit=decision.get("take_profit"),
+                client_order_id=f"gt-{slot}-{symbol}-{decision['action']}",
+            )
+        except DuplicateOrderError as e:
+            # Alpaca's own client_order_id dedup caught what the DynamoDB
+            # lock didn't (e.g. the lock's writer crashed after acquiring it
+            # but before this point, then a manual retry reused the slot).
+            # Not a failure - no alert.
+            print(f"[Execute] {e}")
+            log_pipeline(
+                **base,
+                rg_passed=True,
+                rg_adjustments=rg_result.adjustments,
+                order_submitted=False,
+                execution_result={"skipped": "duplicate_order"},
+            )
+            return
 
         if order:
             exec_result = {
@@ -334,6 +377,11 @@ async def emergency_check():
             return
     except Exception as e:  # noqa: BLE001
         await _alert_startup_failure("Emergency check", e)
+        return
+
+    slot = _slot_id(5)
+    if not acquire_lock("emergency", slot):
+        print(f"[Lock] Emergency check for slot {slot} already handled - skipping")
         return
 
     try:

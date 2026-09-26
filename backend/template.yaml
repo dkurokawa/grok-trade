@@ -86,6 +86,9 @@ Resources:
           KeyType: HASH
         - AttributeName: sk
           KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
 
   # Scheduled jobs (EventBridge Scheduler -> Lambda). Market hours only, New York time.
   TradingFunction:

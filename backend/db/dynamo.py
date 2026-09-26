@@ -4,10 +4,12 @@ Replaces the SQLAlchemy/Postgres models (trades, pipeline_log, system_state).
 
 Table schema
 ------------
-- pk (S): entity type -> "TRADE" | "PIPELINE" | "STATE"
+- pk (S): entity type -> "TRADE" | "PIPELINE" | "STATE" | "LOCK"
 - sk (S): sort key
     - TRADE / PIPELINE : time-sortable id "<UTC ISO>#<rand>" (also used as `id`)
     - STATE            : the state key, e.g. "scheduler_running"
+    - LOCK             : "<kind>#<slot>", e.g. "trading#20260101T0930" - see
+                         acquire_lock(). Items expire via the `ttl` attribute.
 
 Latest-N reads are a single Query on the partition, descending (ScanIndexForward=False).
 Numbers are stored as Decimal (DynamoDB requirement) and converted back to float on read.
@@ -19,11 +21,12 @@ when DECISION_ENGINE=grok.
 """
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 TABLE_NAME = os.getenv("DDB_TABLE", "grok-trade")
 
@@ -234,3 +237,38 @@ def set_scheduler_state(running: bool) -> None:
         }
     )
     print(f"[DB] Scheduler state saved: {running}")
+
+
+# --------------------------------------------------------------------------
+# Slot locks -- prevent a duplicate/retried invocation from running the same
+# trading cycle (or emergency check) twice. See trading_core.trading_cycle().
+# --------------------------------------------------------------------------
+LOCK_TTL_DAYS = 2
+
+
+def acquire_lock(kind: str, slot: str) -> bool:
+    """Claim the (kind, slot) lock. Returns True if this call claimed it
+    (caller should proceed), False if it was already claimed (caller should
+    skip - some invocation, possibly a retry of this same one, already
+    handled this slot).
+
+    The conditional put is atomic, so two concurrent Lambda invocations for
+    the same slot cannot both "win". `ttl` lets DynamoDB expire old locks
+    automatically instead of accumulating forever.
+    """
+    ttl = int((datetime.now(timezone.utc) + timedelta(days=LOCK_TTL_DAYS)).timestamp())
+    try:
+        _get_table().put_item(
+            Item={
+                "pk": "LOCK",
+                "sk": f"{kind}#{slot}",
+                "acquired_at": datetime.now(timezone.utc).isoformat(),
+                "ttl": ttl,
+            },
+            ConditionExpression="attribute_not_exists(pk)",
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise

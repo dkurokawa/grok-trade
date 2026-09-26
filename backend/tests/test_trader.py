@@ -4,7 +4,7 @@ import os
 from unittest.mock import patch, MagicMock
 from datetime import datetime
 
-from trader import Trader
+from trader import DuplicateOrderError, Trader
 
 
 class TestTraderInit:
@@ -785,3 +785,47 @@ class TestEmergencyLiquidation:
         t, mock_client = liquidation_trader
         mock_client.close_all_positions.side_effect = RuntimeError("boom")
         assert t.execute_emergency_liquidation() == []
+
+
+class TestClientOrderIdDedup:
+    """client_order_id lets Alpaca itself reject a duplicate order - the
+    second line of defense behind trading_core's DynamoDB slot lock."""
+
+    @pytest.fixture
+    def trader(self):
+        with patch("trader.TradingClient") as mock_trading:
+            with patch("trader.StockHistoricalDataClient"):
+                return Trader(), mock_trading.return_value
+
+    def _request(self, mock_client):
+        return mock_client.submit_order.call_args[0][0]
+
+    def test_client_order_id_is_sent_on_the_request(self, trader):
+        t, mock_client = trader
+        order = MagicMock()
+        order.id, order.symbol = "order-1", "MSTR"
+        order.side.value, order.qty, order.type.value = "buy", "7", "market"
+        order.status.value, order.submitted_at = "accepted", datetime.now()
+        mock_client.submit_order.return_value = order
+
+        t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert self._request(mock_client).client_order_id == "gt-20260101T0930-MSTR-buy"
+
+    def test_duplicate_client_order_id_raises_not_returns_none(self, trader):
+        t, mock_client = trader
+        mock_client.submit_order.side_effect = Exception(
+            "client_order_id must be unique - an order with this client_order_id already exists"
+        )
+
+        with pytest.raises(DuplicateOrderError):
+            t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+    def test_unrelated_error_still_returns_none(self, trader):
+        """Only a duplicate client_order_id should raise; every other submit
+        failure keeps the existing "return None" contract."""
+        t, mock_client = trader
+        mock_client.submit_order.side_effect = Exception("insufficient buying power")
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+        assert result is None

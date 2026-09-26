@@ -17,6 +17,17 @@ from alpaca.trading.requests import (
 )
 
 
+class DuplicateOrderError(Exception):
+    """Alpaca rejected the order because its client_order_id was already used.
+
+    Not a failure: it means some invocation (very likely a retried Lambda
+    invocation of the same trading cycle, since client_order_id is derived
+    from the cycle's DynamoDB-locked time slot - see
+    trading_core.trading_cycle()) already placed this exact order. Callers
+    should treat this as "already submitted", not alert on it.
+    """
+
+
 class Trader:
     def __init__(self):
         api_key = os.getenv("ALPACA_API_KEY")
@@ -118,8 +129,16 @@ class Trader:
         limit_price: Optional[float] = None,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
+        client_order_id: Optional[str] = None,
     ) -> Optional[dict]:
-        """注文実行（stop_loss / take_profit 対応）"""
+        """注文実行（stop_loss / take_profit 対応）
+
+        client_order_id を渡すと Alpaca 側でも同じ ID の重複発注を拒否させられる
+        （二重発注対策の二段目。一段目は trading_core の DynamoDB ロック）。
+        重複を検知したら None を返さず DuplicateOrderError を送出する。
+        None は「発注失敗」として trading_core が失敗通知を出すが、重複は
+        失敗ではない（既に発注済みという意味）ため区別する。
+        """
         if action not in ["buy", "sell"]:
             print(f"[Trader] Invalid action: {action}")
             return None
@@ -153,6 +172,7 @@ class Trader:
                     side=side,
                     time_in_force=TimeInForce.GTC,
                     limit_price=limit_price,
+                    client_order_id=client_order_id,
                     **protective,
                 )
             else:
@@ -161,6 +181,7 @@ class Trader:
                     qty=quantity,
                     side=side,
                     time_in_force=TimeInForce.GTC,
+                    client_order_id=client_order_id,
                     **protective,
                 )
 
@@ -182,6 +203,13 @@ class Trader:
             return result
 
         except Exception as e:
+            message = str(e).lower()
+            if client_order_id and "client_order_id" in message and (
+                "already" in message or "duplicate" in message or "exists" in message
+            ):
+                raise DuplicateOrderError(
+                    f"Order for {symbol} already submitted (client_order_id={client_order_id})"
+                ) from e
             print(f"[Trader] Order error: {e}")
             return None
 

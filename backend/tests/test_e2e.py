@@ -487,7 +487,12 @@ class TestMultipleCycles:
              patch("trading_core.notifier", mock_notifier), \
              patch("trading_core.guard") as mock_guard, \
              patch("trading_core.log_pipeline"), \
-             patch("trading_core.log_trade"):
+             patch("trading_core.log_trade"), \
+             patch("trading_core.acquire_lock", return_value=True):
+            # acquire_lock is forced to always succeed: these 3 calls simulate
+            # 3 separate scheduled cycles (30 min apart in reality), but
+            # running them back-to-back in a test would otherwise resolve to
+            # the same slot and get deduped after the first (Issue #4).
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
@@ -499,6 +504,99 @@ class TestMultipleCycles:
 
         # Should have 2 orders (buy and sell, not hold)
         assert mock_trader.execute_order.call_count == 2
+
+
+class TestDuplicateSlotLock:
+    """A retried/duplicate invocation for the same scheduled slot must not
+    place a second order (Issue #4). Unlike TestMultipleCycles, this
+    exercises the real DynamoDB lock (moto-backed via the module's autouse
+    _pipeline_env fixture) instead of forcing it to always succeed."""
+
+    @pytest.mark.asyncio
+    async def test_second_call_in_same_slot_does_not_trade_again(self):
+        mock_trader = MagicMock()
+        mock_trader.get_account.return_value = {
+            "cash": 100000.0, "portfolio_value": 100000.0,
+            "buying_power": 200000.0, "equity": 100000.0,
+            "last_equity": 100000.0, "daily_pnl": 0.0,
+        }
+        mock_trader.get_positions.return_value = []
+        mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
+        mock_trader.execute_order.return_value = {
+            "order_id": "order-1", "status": "filled",
+        }
+
+        mock_grok = MagicMock()
+        mock_grok.collect_market_report.return_value = (make_mock_grok_report(), 100)
+
+        mock_opus = MagicMock()
+        mock_opus.analyze.return_value = (make_mock_opus_decision(action="buy"), 600)
+
+        mock_notifier = MagicMock()
+        mock_notifier.notify_alert = AsyncMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline"), \
+             patch("trading_core.log_trade"):
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+            mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
+            mock_guard.max_daily_loss = 500
+
+            from trading_core import trading_cycle
+            await trading_cycle()  # first invocation for this slot: trades
+            await trading_cycle()  # retried invocation, same slot: must not
+
+        mock_trader.execute_order.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_alpaca_side_duplicate_is_not_alerted(self):
+        """If Alpaca itself rejects the order as a client_order_id duplicate
+        (trader.execute_order raises DuplicateOrderError), that is not a
+        failure and must not trigger the "Order failed" alert."""
+        from trader import DuplicateOrderError
+
+        mock_trader = MagicMock()
+        mock_trader.get_account.return_value = {
+            "cash": 100000.0, "portfolio_value": 100000.0,
+            "buying_power": 200000.0, "equity": 100000.0,
+            "last_equity": 100000.0, "daily_pnl": 0.0,
+        }
+        mock_trader.get_positions.return_value = []
+        mock_trader.get_market_data.return_value = {"MSTR": {"price": 350.0}}
+        mock_trader.execute_order.side_effect = DuplicateOrderError("already submitted")
+
+        mock_grok = MagicMock()
+        mock_grok.collect_market_report.return_value = (make_mock_grok_report(), 100)
+
+        mock_opus = MagicMock()
+        mock_opus.analyze.return_value = (make_mock_opus_decision(action="buy"), 600)
+
+        mock_notifier = MagicMock()
+        mock_notifier.notify_alert = AsyncMock()
+        mock_notifier.send_pipeline_log = AsyncMock()
+
+        with patch("trading_core.trader", mock_trader), \
+             patch("trading_core.grok", mock_grok), \
+             patch("trading_core.opus", mock_opus), \
+             patch("trading_core.notifier", mock_notifier), \
+             patch("trading_core.guard") as mock_guard, \
+             patch("trading_core.log_pipeline") as mock_log_pipeline, \
+             patch("trading_core.log_trade"):
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+            mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
+            mock_guard.max_daily_loss = 500
+
+            from trading_core import trading_cycle
+            await trading_cycle()
+
+        mock_notifier.notify_alert.assert_not_called()
+        assert mock_log_pipeline.call_args.kwargs["order_submitted"] is False
+        assert mock_log_pipeline.call_args.kwargs["execution_result"] == {"skipped": "duplicate_order"}
 
 
 class TestRiskGuardAdjustments:

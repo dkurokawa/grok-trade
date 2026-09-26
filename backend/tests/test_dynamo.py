@@ -137,3 +137,30 @@ class TestPipelineLog:
         time.sleep(0.002)
         dyn.log_pipeline(cycle_id="new")
         assert dyn.get_pipeline_logs(10)[0]["cycle_id"] == "new"
+
+
+class TestLocks:
+    """Slot locks that dedupe a retried/duplicate scheduled invocation."""
+
+    def test_first_caller_acquires(self, dyn):
+        assert dyn.acquire_lock("trading", "20260101T0930") is True
+
+    def test_second_caller_for_same_slot_is_rejected(self, dyn):
+        assert dyn.acquire_lock("trading", "20260101T0930") is True
+        assert dyn.acquire_lock("trading", "20260101T0930") is False
+
+    def test_different_slots_both_acquire(self, dyn):
+        assert dyn.acquire_lock("trading", "20260101T0930") is True
+        assert dyn.acquire_lock("trading", "20260101T1000") is True
+
+    def test_different_kinds_dont_collide(self, dyn):
+        """trading#<slot> and emergency#<slot> are independent locks."""
+        assert dyn.acquire_lock("trading", "20260101T0930") is True
+        assert dyn.acquire_lock("emergency", "20260101T0930") is True
+
+    def test_lock_item_carries_a_ttl(self, dyn):
+        dyn.acquire_lock("trading", "20260101T0930")
+        import time as _time
+
+        item = dyn._get_table().get_item(Key={"pk": "LOCK", "sk": "trading#20260101T0930"})["Item"]
+        assert int(item["ttl"]) > _time.time()
