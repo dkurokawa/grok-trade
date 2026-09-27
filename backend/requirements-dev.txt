@@ -1,0 +1,110 @@
+anyio==4.15.1
+    # via httpx
+ast-serialize==0.11.2
+    # via mypy
+boto3==1.43.103
+    # via moto
+botocore==1.43.103
+    # via
+    #   boto3
+    #   moto
+    #   s3transfer
+certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
+cffi==2.1.1
+    # via cryptography
+charset-normalizer==3.5.1
+    # via requests
+coverage==7.16.1
+    # via pytest-cov
+cryptography==50.0.1
+    # via moto
+docker==7.2.0
+    # via moto
+h11==0.16.0
+    # via httpcore
+httpcore==1.0.9
+    # via httpx
+httpx==0.28.1
+    # via -r requirements-dev.in
+idna==3.20
+    # via
+    #   anyio
+    #   httpx
+    #   requests
+iniconfig==2.3.0
+    # via pytest
+jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
+librt==0.15.0
+    # via mypy
+markupsafe==3.0.3
+    # via werkzeug
+moto==5.2.3
+    # via -r requirements-dev.in
+mypy==2.3.1
+    # via -r requirements-dev.in
+mypy-extensions==1.1.0
+    # via mypy
+packaging==26.3
+    # via pytest
+pathspec==1.1.1
+    # via mypy
+pluggy==1.6.0
+    # via
+    #   pytest
+    #   pytest-cov
+py-partiql-parser==0.6.3
+    # via moto
+pycparser==3.0
+    # via cffi
+pygments==2.21.0
+    # via pytest
+pytest==9.1.1
+    # via
+    #   -r requirements-dev.in
+    #   pytest-asyncio
+    #   pytest-cov
+pytest-asyncio==1.4.0
+    # via -r requirements-dev.in
+pytest-cov==7.1.0
+    # via -r requirements-dev.in
+python-dateutil==2.9.0.post0
+    # via botocore
+pyyaml==6.0.3
+    # via responses
+requests==2.34.2
+    # via
+    #   docker
+    #   moto
+    #   responses
+responses==0.26.3
+    # via moto
+ruff==0.16.9
+    # via -r requirements-dev.in
+s3transfer==0.19.2
+    # via boto3
+six==1.17.0
+    # via python-dateutil
+tomli==2.4.1
+    # via coverage
+typing-extensions==4.16.0
+    # via
+    #   anyio
+    #   mypy
+    #   pytest-asyncio
+urllib3==2.8.0
+    # via
+    #   botocore
+    #   docker
+    #   requests
+    #   responses
+werkzeug==3.1.8
+    # via moto
+xmltodict==1.0.4
+    # via moto

@@ -1,10 +1,13 @@
 """Trader unit tests - comprehensive edge cases and error handling"""
-import pytest
-import os
-from unittest.mock import patch, MagicMock
-from datetime import datetime
 
-from trader import Trader
+import os
+from datetime import datetime
+from unittest.mock import MagicMock, patch
+
+import pytest
+from alpaca.trading.enums import OrderSide
+
+from trader import DuplicateOrderError, Trader
 
 
 class TestTraderInit:
@@ -12,37 +15,30 @@ class TestTraderInit:
 
     def test_init_paper_trading(self):
         """Test initialization in paper trading mode"""
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
-                with patch("trader.StockHistoricalDataClient") as mock_data:
-                    trader = Trader()
+                with patch("trader.StockHistoricalDataClient"):
+                    Trader()
                     mock_trading.assert_called_once_with("test_key", "test_secret", paper=True)
 
     def test_init_live_trading(self):
         """Test initialization in live trading mode"""
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "false"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "false"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
-                with patch("trader.StockHistoricalDataClient") as mock_data:
-                    trader = Trader()
+                with patch("trader.StockHistoricalDataClient"):
+                    Trader()
                     mock_trading.assert_called_once_with("test_key", "test_secret", paper=False)
 
     def test_init_default_paper(self):
         """Test default is paper trading when env var not set"""
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret"
-        }, clear=True):
+        with patch.dict(os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret"}, clear=True):
             with patch("trader.TradingClient") as mock_trading:
-                with patch("trader.StockHistoricalDataClient") as mock_data:
-                    trader = Trader()
+                with patch("trader.StockHistoricalDataClient"):
+                    Trader()
                     mock_trading.assert_called_once_with("test_key", "test_secret", paper=True)
 
 
@@ -51,11 +47,9 @@ class TestGetAccount:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     t = Trader()
@@ -119,11 +113,9 @@ class TestGetPositions:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     t = Trader()
@@ -193,11 +185,9 @@ class TestGetMarketData:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient"):
                 with patch("trader.StockHistoricalDataClient") as mock_data:
                     t = Trader()
@@ -235,10 +225,7 @@ class TestGetMarketData:
         mock_bar_tsla2 = MagicMock(close=250.0, volume=4500000)
 
         mock_bars = MagicMock()
-        mock_bars.data = {
-            "MSTR": [mock_bar_mstr1, mock_bar_mstr2],
-            "TSLA": [mock_bar_tsla1, mock_bar_tsla2]
-        }
+        mock_bars.data = {"MSTR": [mock_bar_mstr1, mock_bar_mstr2], "TSLA": [mock_bar_tsla1, mock_bar_tsla2]}
         mock_data_client.get_stock_bars.return_value = mock_bars
 
         result = t.get_market_data(["MSTR", "TSLA"])
@@ -299,11 +286,9 @@ class TestExecuteOrder:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     t = Trader()
@@ -323,11 +308,7 @@ class TestExecuteOrder:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=10
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=10)
 
         assert result is not None
         assert result["order_id"] == "order-123"
@@ -349,11 +330,7 @@ class TestExecuteOrder:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="sell",
-            quantity=5
-        )
+        result = t.execute_order(symbol="MSTR", action="sell", quantity=5)
 
         assert result is not None
         assert result["side"] == "sell"
@@ -372,13 +349,7 @@ class TestExecuteOrder:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=10,
-            order_type="limit",
-            limit_price=350.0
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=10, order_type="limit", limit_price=350.0)
 
         assert result is not None
         assert result["type"] == "limit"
@@ -387,11 +358,7 @@ class TestExecuteOrder:
         """Test order with invalid action"""
         t, mock_client = trader
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="hold",
-            quantity=10
-        )
+        result = t.execute_order(symbol="MSTR", action="hold", quantity=10)
 
         assert result is None
 
@@ -399,11 +366,7 @@ class TestExecuteOrder:
         """Test order with zero quantity"""
         t, mock_client = trader
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=0
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=0)
 
         assert result is None
 
@@ -411,11 +374,7 @@ class TestExecuteOrder:
         """Test order with negative quantity"""
         t, mock_client = trader
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=-10
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=-10)
 
         assert result is None
 
@@ -424,11 +383,7 @@ class TestExecuteOrder:
         t, mock_client = trader
         mock_client.submit_order.side_effect = Exception("Insufficient buying power")
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=1000000
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=1000000)
 
         assert result is None
 
@@ -446,11 +401,7 @@ class TestExecuteOrder:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=10
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=10)
 
         # Order returned but with rejected status
         assert result is not None
@@ -462,11 +413,9 @@ class TestGetOrderStatus:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     t = Trader()
@@ -540,11 +489,9 @@ class TestTraderEdgeCases:
 
     @pytest.fixture
     def trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "test_key",
-            "ALPACA_SECRET_KEY": "test_secret",
-            "ALPACA_PAPER": "true"
-        }):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test_key", "ALPACA_SECRET_KEY": "test_secret", "ALPACA_PAPER": "true"}
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient") as mock_data:
                     t = Trader()
@@ -564,11 +511,7 @@ class TestTraderEdgeCases:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="BRK.B",
-            action="buy",
-            quantity=1
-        )
+        result = t.execute_order(symbol="BRK.B", action="buy", quantity=1)
 
         assert result is not None
         assert result["symbol"] == "BRK.B"
@@ -600,11 +543,7 @@ class TestTraderEdgeCases:
         mock_order.submitted_at = datetime.now()
         mock_client.submit_order.return_value = mock_order
 
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=1000000
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=1000000)
 
         assert result is not None
         assert result["qty"] == 1000000.0
@@ -614,11 +553,7 @@ class TestTraderEdgeCases:
         t, mock_client, _ = trader
 
         # Note: Alpaca supports fractional shares for some accounts
-        result = t.execute_order(
-            symbol="MSTR",
-            action="buy",
-            quantity=0.5
-        )
+        result = t.execute_order(symbol="MSTR", action="buy", quantity=0.5)
 
         # Current implementation checks quantity > 0, and 0.5 > 0 is True
         # so the order gets submitted (Alpaca may handle fractional shares)
@@ -635,20 +570,24 @@ class TestDataFeed:
         def _make():
             with patch("trader.TradingClient"), patch("trader.StockHistoricalDataClient"):
                 return Trader()
+
         return _make
 
     def test_defaults_to_iex(self, make_trader, monkeypatch):
         from alpaca.data.enums import DataFeed
+
         monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
         assert make_trader().data_feed == DataFeed.IEX
 
     def test_feed_is_overridable(self, make_trader, monkeypatch):
         from alpaca.data.enums import DataFeed
+
         monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
         assert make_trader().data_feed == DataFeed.SIP
 
     def test_request_carries_the_feed(self, make_trader, monkeypatch):
         from alpaca.data.enums import DataFeed
+
         monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
         t = make_trader()
 
@@ -675,9 +614,14 @@ class TestProtectiveOrders:
 
     @pytest.fixture
     def bracket_trader(self):
-        with patch.dict(os.environ, {
-            "ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s", "ALPACA_PAPER": "true",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "ALPACA_API_KEY": "k",
+                "ALPACA_SECRET_KEY": "s",
+                "ALPACA_PAPER": "true",
+            },
+        ):
             with patch("trader.TradingClient") as mock_trading:
                 with patch("trader.StockHistoricalDataClient"):
                     t = Trader()
@@ -697,6 +641,7 @@ class TestProtectiveOrders:
 
     def test_both_legs_make_a_bracket(self, bracket_trader):
         from alpaca.trading.enums import OrderClass
+
         t, mock_client = bracket_trader
         t.execute_order("MSTR", "buy", 7, stop_loss=120.0, take_profit=150.0)
 
@@ -708,6 +653,7 @@ class TestProtectiveOrders:
 
     def test_stop_loss_only_makes_an_oto(self, bracket_trader):
         from alpaca.trading.enums import OrderClass
+
         t, mock_client = bracket_trader
         t.execute_order("MSTR", "buy", 7, stop_loss=120.0)
 
@@ -743,23 +689,80 @@ class TestOpenBuyOrders:
             with patch("trader.StockHistoricalDataClient"):
                 return Trader(), mock_trading.return_value
 
+    def _order(self, symbol, side, qty=1.0, limit_price=None):
+        o = MagicMock()
+        o.symbol, o.side, o.qty, o.limit_price = symbol, side, qty, limit_price
+        return o
+
     def test_returns_only_buy_side_symbols(self, order_trader):
         """Protective sells linger for held symbols; they must not look like a
         pending entry and block the next buy forever."""
         from alpaca.trading.enums import OrderSide
+
         t, mock_client = order_trader
 
-        buy, sell = MagicMock(), MagicMock()
-        buy.symbol, buy.side = "MSTR", OrderSide.BUY
-        sell.symbol, sell.side = "TSLA", OrderSide.SELL
+        buy = self._order("MSTR", OrderSide.BUY)
+        sell = self._order("TSLA", OrderSide.SELL)
         mock_client.get_orders.return_value = [buy, sell]
 
         assert t.get_open_buy_order_symbols() == {"MSTR"}
 
-    def test_returns_empty_set_on_error(self, order_trader):
+    def test_read_failure_raises_not_returns_empty(self, order_trader):
+        """E1: a failed read must not look like "no open orders" - trading_core
+        treats this exception as a reason to skip the buy (fail closed),
+        which an empty set would silently defeat."""
         t, mock_client = order_trader
         mock_client.get_orders.side_effect = RuntimeError("boom")
-        assert t.get_open_buy_order_symbols() == set()
+        with pytest.raises(RuntimeError, match="boom"):
+            t.get_open_buy_order_symbols()
+
+
+class TestGetOpenBuyOrders:
+    """get_open_buy_orders() (Issue M2): symbol/qty/limit_price for each
+    open buy order, used to fold pending buys into the total position ratio."""
+
+    @pytest.fixture
+    def order_trader(self):
+        with patch("trader.TradingClient") as mock_trading:
+            with patch("trader.StockHistoricalDataClient"):
+                return Trader(), mock_trading.return_value
+
+    def _order(self, symbol, side, qty=1.0, limit_price=None):
+        o = MagicMock()
+        o.symbol, o.side, o.qty, o.limit_price = symbol, side, qty, limit_price
+        return o
+
+    def test_returns_symbol_qty_limit_price_for_buys_only(self, order_trader):
+        from alpaca.trading.enums import OrderSide
+
+        t, mock_client = order_trader
+
+        buy = self._order("MSTR", OrderSide.BUY, qty=10, limit_price=350.5)
+        sell = self._order("TSLA", OrderSide.SELL, qty=5)
+        mock_client.get_orders.return_value = [buy, sell]
+
+        assert t.get_open_buy_orders() == [
+            {"symbol": "MSTR", "qty": 10.0, "limit_price": 350.5},
+        ]
+
+    def test_market_buy_order_has_no_limit_price(self, order_trader):
+        from alpaca.trading.enums import OrderSide
+
+        t, mock_client = order_trader
+
+        buy = self._order("QQQ", OrderSide.BUY, qty=3, limit_price=None)
+        mock_client.get_orders.return_value = [buy]
+
+        assert t.get_open_buy_orders() == [{"symbol": "QQQ", "qty": 3.0, "limit_price": None}]
+
+    def test_read_failure_raises_not_returns_empty(self, order_trader):
+        """E1: a failed read must raise, not silently report "no open buy
+        orders" - the total-position-ratio check would otherwise go through
+        with a false sense of how much is already committed."""
+        t, mock_client = order_trader
+        mock_client.get_orders.side_effect = RuntimeError("boom")
+        with pytest.raises(RuntimeError, match="boom"):
+            t.get_open_buy_orders()
 
 
 class TestEmergencyLiquidation:
@@ -779,9 +782,298 @@ class TestEmergencyLiquidation:
         results = t.execute_emergency_liquidation()
 
         mock_client.close_all_positions.assert_called_once_with(cancel_orders=True)
-        assert results == [{"symbol": "MSTR", "status": 200}]
+        assert results == [{"symbol": "MSTR", "status": 200, "ok": True}]
 
-    def test_error_returns_empty(self, liquidation_trader):
+    def test_reports_per_symbol_failure_not_ok(self, liquidation_trader):
+        """A per-symbol failure (e.g. status 500) must be visible to the
+        caller (Issue M1) - not silently reported as if it succeeded."""
+        from alpaca.trading.models import FailedClosePositionDetails
+
+        t, mock_client = liquidation_trader
+        failed = MagicMock()
+        failed.symbol, failed.status = "TSLA", 500
+        failed.body = FailedClosePositionDetails(code=40310000, message="insufficient qty available")
+        mock_client.close_all_positions.return_value = [failed]
+
+        results = t.execute_emergency_liquidation()
+
+        assert results == [
+            {
+                "symbol": "TSLA",
+                "status": 500,
+                "ok": False,
+                "error": "insufficient qty available",
+            }
+        ]
+
+    def test_mixed_success_and_failure(self, liquidation_trader):
+        from alpaca.trading.models import FailedClosePositionDetails
+
+        t, mock_client = liquidation_trader
+        ok = MagicMock()
+        ok.symbol, ok.status = "MSTR", 200
+        bad = MagicMock()
+        bad.symbol, bad.status = "TSLA", 500
+        bad.body = FailedClosePositionDetails(code=40310000, message="boom")
+        mock_client.close_all_positions.return_value = [ok, bad]
+
+        results = t.execute_emergency_liquidation()
+
+        assert [r["ok"] for r in results] == [True, False]
+
+    def test_close_all_positions_exception_propagates(self, liquidation_trader):
+        """execute_emergency_liquidation() must not swallow a failure to even
+        attempt closing - a silent [] would look identical to "nothing was
+        held", which is indistinguishable from "liquidation never ran"."""
         t, mock_client = liquidation_trader
         mock_client.close_all_positions.side_effect = RuntimeError("boom")
-        assert t.execute_emergency_liquidation() == []
+        with pytest.raises(RuntimeError, match="boom"):
+            t.execute_emergency_liquidation()
+
+
+class TestMarketClock:
+    """F8: is_market_open() gates trading_cycle() on Alpaca's market calendar."""
+
+    @pytest.fixture
+    def trader(self):
+        with patch("trader.TradingClient") as mock_trading:
+            with patch("trader.StockHistoricalDataClient"):
+                return Trader(), mock_trading.return_value
+
+    def test_open(self, trader):
+        t, mock_client = trader
+        clock = MagicMock()
+        clock.is_open = True
+        mock_client.get_clock.return_value = clock
+
+        assert t.is_market_open() is True
+
+    def test_closed(self, trader):
+        t, mock_client = trader
+        clock = MagicMock()
+        clock.is_open = False
+        mock_client.get_clock.return_value = clock
+
+        assert t.is_market_open() is False
+
+    def test_fetch_failure_raises(self, trader):
+        """F8: fail closed - 呼び出し元 (trading_core) が「開場中か分からない
+        ので取引しない」と判断できるよう、例外をそのまま送出する。"""
+        t, mock_client = trader
+        mock_client.get_clock.side_effect = RuntimeError("Alpaca API down")
+
+        with pytest.raises(RuntimeError, match="Alpaca API down"):
+            t.is_market_open()
+
+
+class TestCancelAllOrders:
+    """F4: emergency_check() cancels pending orders even when there is
+    nothing held to liquidate."""
+
+    @pytest.fixture
+    def trader(self):
+        with patch("trader.TradingClient") as mock_trading:
+            with patch("trader.StockHistoricalDataClient"):
+                return Trader(), mock_trading.return_value
+
+    def test_cancels_all_orders(self, trader):
+        t, mock_client = trader
+        t.cancel_all_orders()
+        mock_client.cancel_orders.assert_called_once_with()
+
+    def test_failure_propagates(self, trader):
+        t, mock_client = trader
+        mock_client.cancel_orders.side_effect = RuntimeError("boom")
+        with pytest.raises(RuntimeError, match="boom"):
+            t.cancel_all_orders()
+
+
+class TestClientOrderIdDedup:
+    """execute_order() checks get_order_by_client_id() before submitting
+    (E5) - the second line of defense behind trading_core's DynamoDB slot
+    lock. Exception-message string-matching on submit_order() failures was
+    removed; duplicate detection now happens explicitly beforehand."""
+
+    @pytest.fixture
+    def trader(self):
+        with patch("trader.TradingClient") as mock_trading:
+            with patch("trader.StockHistoricalDataClient"):
+                return Trader(), mock_trading.return_value
+
+    def _request(self, mock_client):
+        return mock_client.submit_order.call_args[0][0]
+
+    def _not_found(self):
+        """Simulates Alpaca's 404 (no order with this client_order_id yet)."""
+        from alpaca.common.exceptions import APIError
+
+        http_error = MagicMock()
+        http_error.response.status_code = 404
+        return APIError('{"code": 40410000, "message": "order not found"}', http_error)
+
+    def _mock_order(self, symbol="MSTR", side="buy"):
+        order = MagicMock()
+        order.id, order.symbol = "order-1", symbol
+        order.side.value, order.qty, order.type.value = side, "7", "market"
+        order.status.value, order.submitted_at = "accepted", datetime.now()
+        return order
+
+    def _duplicate_rejected(self):
+        """Simulates Alpaca's submit_order() rejecting a request because its
+        client_order_id was already used (422) - the race where another
+        invocation submits the same client_order_id between our pre-submit
+        check (404) and this submit_order() call."""
+        from alpaca.common.exceptions import APIError
+
+        http_error = MagicMock()
+        http_error.response.status_code = 422
+        return APIError('{"code": 42910000, "message": "client_order_id must be unique"}', http_error)
+
+    def test_timeout_after_acceptance_returns_the_accepted_order(self, trader):
+        """A submit that times out may already have been accepted - look it up."""
+        t, mock_client = trader
+        accepted = self._mock_order()
+        mock_client.get_order_by_client_id.side_effect = [self._not_found(), accepted]
+        mock_client.submit_order.side_effect = TimeoutError("read timed out")
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert result is not None
+        assert result["order_id"] == "order-1"
+        assert result["status"] == "accepted"
+
+    def test_timeout_with_unconfirmable_state_raises(self, trader):
+        from trader import OrderStateUnknown
+
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = [self._not_found(), ConnectionError("down")]
+        mock_client.submit_order.side_effect = TimeoutError("read timed out")
+
+        with pytest.raises(OrderStateUnknown):
+            t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+    def test_cancel_open_buy_orders_leaves_sell_legs(self, trader):
+        t, mock_client = trader
+        buy, sell = MagicMock(), MagicMock()
+        buy.side, buy.id = OrderSide.BUY, "b1"
+        sell.side, sell.id = OrderSide.SELL, "s1"
+        mock_client.get_orders.return_value = [buy, sell]
+
+        assert t.cancel_open_buy_orders() == 1
+        mock_client.cancel_order_by_id.assert_called_once_with("b1")
+
+    def test_client_order_id_is_sent_on_the_request(self, trader):
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = self._not_found()
+        mock_client.submit_order.return_value = self._mock_order()
+
+        t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert self._request(mock_client).client_order_id == "gt-20260101T0930-MSTR-buy"
+        mock_client.get_order_by_client_id.assert_called_once_with("gt-20260101T0930-MSTR-buy")
+
+    def test_existing_order_raises_duplicate_not_returns_none(self, trader):
+        """既存あり → 発注しない (E5)。"""
+        t, mock_client = trader
+        existing = MagicMock()
+        existing.id = "order-existing"
+        mock_client.get_order_by_client_id.return_value = existing
+
+        with pytest.raises(DuplicateOrderError):
+            t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        mock_client.submit_order.assert_not_called()
+
+    def test_not_found_proceeds_to_submit(self, trader):
+        """404 → 発注 (E5)。"""
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = self._not_found()
+        mock_client.submit_order.return_value = self._mock_order()
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert result is not None
+        mock_client.submit_order.assert_called_once()
+
+    def test_confirmation_failure_skips_buy(self, trader):
+        """確認自体が失敗（404以外） → 買いは発注しない (E5, E1と同じ fail closed)。"""
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = RuntimeError("Alpaca API down")
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert result is None
+        mock_client.submit_order.assert_not_called()
+
+    def test_confirmation_failure_does_not_block_sell(self, trader):
+        """同じ確認失敗でも売りは止めない (E5, fail open for exits)。"""
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = RuntimeError("Alpaca API down")
+        mock_client.submit_order.return_value = self._mock_order(side="sell")
+
+        result = t.execute_order("MSTR", "sell", 7, client_order_id="gt-20260101T0930-MSTR-sell")
+
+        assert result is not None
+        mock_client.submit_order.assert_called_once()
+
+    def test_no_client_order_id_skips_the_check(self, trader):
+        t, mock_client = trader
+        mock_client.submit_order.return_value = self._mock_order()
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id=None)
+
+        assert result is not None
+        mock_client.get_order_by_client_id.assert_not_called()
+
+    def test_unrelated_submit_error_still_returns_none(self, trader):
+        """duplicate 検知を通過したあと、submit_order 自体が失敗した場合は
+        従来どおり None を返す。"""
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = self._not_found()
+        mock_client.submit_order.side_effect = Exception("insufficient buying power")
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+        assert result is None
+
+    def test_submit_race_confirmed_duplicate_raises(self, trader):
+        """F6: 事前確認は404だったが、その直後に別の呼び出しが先に同じ
+        client_order_id で発注したレースで submit_order() 自体が422で
+        拒否した場合、もう一度確認して重複と分かれば DuplicateOrderError
+        にする（文字列判定はしない）。"""
+        t, mock_client = trader
+        existing = self._mock_order()
+        mock_client.get_order_by_client_id.side_effect = [self._not_found(), existing]
+        mock_client.submit_order.side_effect = self._duplicate_rejected()
+
+        with pytest.raises(DuplicateOrderError):
+            t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert mock_client.get_order_by_client_id.call_count == 2
+
+    def test_submit_422_not_confirmed_returns_none(self, trader):
+        """422 で拒否されても、もう一度確認して見つからなければ重複とは
+        断定せず、従来どおり「発注失敗」として None を返す。"""
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = [self._not_found(), self._not_found()]
+        mock_client.submit_order.side_effect = self._duplicate_rejected()
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert result is None
+
+    def test_submit_error_other_status_not_treated_as_duplicate(self, trader):
+        """422 以外の submit_order エラーは重複扱いしない。受理されていないこと
+        （404）を確かめたうえで「発注失敗」として None を返す。"""
+        from alpaca.common.exceptions import APIError
+
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = self._not_found()
+        http_error = MagicMock()
+        http_error.response.status_code = 403
+        mock_client.submit_order.side_effect = APIError('{"message": "forbidden"}', http_error)
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert result is None
+        # pre-submit confirmation + one post-failure lookup
+        assert mock_client.get_order_by_client_id.call_count == 2

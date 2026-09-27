@@ -1,18 +1,20 @@
 """Discord Webhook通知モジュール - パイプライン全ステージ対応"""
+
 import os
 from datetime import datetime
+from typing import Any
 
 import httpx
 
 # ステージ別カラー
-COLOR_GROK = 0x1DA1F2      # Twitter blue
-COLOR_OPUS = 0xD97706      # Opus orange
-COLOR_BLOCKED = 0xEF4444   # Red
+COLOR_GROK = 0x1DA1F2  # Twitter blue
+COLOR_OPUS = 0xD97706  # Opus orange
+COLOR_BLOCKED = 0xEF4444  # Red
 COLOR_ADJUSTED = 0xF59E0B  # Yellow
 COLOR_EXECUTED = 0x22C55E  # Green
-COLOR_SKIP = 0x6B7280      # Gray
-COLOR_ALERT = 0xEF4444     # Red
-COLOR_INFO = 0x3B82F6      # Blue
+COLOR_SKIP = 0x6B7280  # Gray
+COLOR_ALERT = 0xEF4444  # Red
+COLOR_INFO = 0x3B82F6  # Blue
 
 
 class DiscordNotifier:
@@ -49,7 +51,7 @@ class DiscordNotifier:
 
     async def send_pipeline_log(self, cycle_id: str, stage: str, data: dict):
         """パイプラインの各ステージをDiscordにログ"""
-        embed = {
+        embed: dict[str, Any] = {
             "title": f"Cycle {cycle_id[:8]}",
             "timestamp": datetime.utcnow().isoformat(),
             "fields": [],
@@ -58,79 +60,90 @@ class DiscordNotifier:
         if stage == "grok":
             embed["color"] = COLOR_GROK
             sentiment = data.get("sentiment", {})
-            embed["fields"].append({
-                "name": "Grok Report",
-                "value": (
-                    f"Sentiment: {sentiment.get('overall', 0)}\n"
-                    f"Change: {'Yes' if data.get('significant_change') else 'No'}\n"
-                    f"News: {len(data.get('breaking_news', []))} items"
-                ),
-            })
+            embed["fields"].append(
+                {
+                    "name": "Grok Report",
+                    "value": (
+                        f"Sentiment: {sentiment.get('overall', 0)}\n"
+                        f"Change: {'Yes' if data.get('significant_change') else 'No'}\n"
+                        f"News: {len(data.get('breaking_news', []))} items"
+                    ),
+                }
+            )
             if data.get("_warning"):
-                embed["fields"].append({
-                    "name": "Warning",
-                    "value": data["_warning"],
-                })
+                embed["fields"].append(
+                    {
+                        "name": "Warning",
+                        "value": data["_warning"],
+                    }
+                )
 
         elif stage == "opus_decision":
             embed["color"] = COLOR_OPUS
             action_emoji = {"buy": "BUY", "sell": "SELL", "hold": "HOLD"}
             engine = str(data.get("decision_engine", "opus")).capitalize()
-            embed["fields"].append({
-                "name": f"{engine} Decision",
-                "value": (
-                    f"{action_emoji.get(data.get('action', ''), '?')} "
-                    f"{data.get('symbol', '')}\n"
-                    f"Size: {data.get('position_size_pct', 0)}% | "
-                    f"Confidence: {data.get('confidence', 0)}%\n"
-                    f"Risk: {data.get('risk_assessment', 'unknown')}\n"
-                    f"Reason: {data.get('reasoning', '')}"
-                ),
-            })
+            embed["fields"].append(
+                {
+                    "name": f"{engine} Decision",
+                    "value": (
+                        f"{action_emoji.get(data.get('action', ''), '?')} "
+                        f"{data.get('symbol', '')}\n"
+                        f"Size: {data.get('position_size_pct', 0)}% | "
+                        f"Confidence: {data.get('confidence', 0)}%\n"
+                        f"Risk: {data.get('risk_assessment', 'unknown')}\n"
+                        f"Reason: {data.get('reasoning', '')}"
+                    ),
+                }
+            )
             if data.get("adjustments"):
-                adj_text = "\n".join([
-                    f"{a['field']}: {a['original']} -> {a['adjusted']} ({a['reason']})"
-                    for a in data["adjustments"]
-                ])
-                embed["fields"].append({
-                    "name": f"{engine} Self-Adjustments",
-                    "value": adj_text,
-                })
+                adj_text = "\n".join(
+                    [f"{a['field']}: {a['original']} -> {a['adjusted']} ({a['reason']})" for a in data["adjustments"]]
+                )
+                embed["fields"].append(
+                    {
+                        "name": f"{engine} Self-Adjustments",
+                        "value": adj_text,
+                    }
+                )
 
         elif stage == "risk_guard":
             if not data.get("passed"):
                 embed["color"] = COLOR_BLOCKED
-                embed["fields"].append({
-                    "name": "Risk Guard BLOCKED",
-                    "value": data.get("reason", "unknown"),
-                })
+                embed["fields"].append(
+                    {
+                        "name": "Risk Guard BLOCKED",
+                        "value": data.get("reason", "unknown"),
+                    }
+                )
             elif data.get("adjustments"):
                 embed["color"] = COLOR_ADJUSTED
-                adj_text = "\n".join([
-                    f"{a['field']}: {a['original']} -> {a['adjusted']} ({a['reason']})"
-                    for a in data["adjustments"]
-                ])
-                embed["fields"].append({
-                    "name": "Risk Guard Adjustments",
-                    "value": adj_text,
-                })
+                adj_text = "\n".join(
+                    [f"{a['field']}: {a['original']} -> {a['adjusted']} ({a['reason']})" for a in data["adjustments"]]
+                )
+                embed["fields"].append(
+                    {
+                        "name": "Risk Guard Adjustments",
+                        "value": adj_text,
+                    }
+                )
 
         elif stage == "execution":
             embed["color"] = COLOR_EXECUTED
-            embed["fields"].append({
-                "name": "Executed",
-                "value": (
-                    f"Order: {data.get('alpaca_order_id', 'N/A')}\n"
-                    f"Status: {data.get('status', 'unknown')}"
-                ),
-            })
+            embed["fields"].append(
+                {
+                    "name": "Executed",
+                    "value": (f"Order: {data.get('alpaca_order_id', 'N/A')}\nStatus: {data.get('status', 'unknown')}"),
+                }
+            )
 
         elif stage == "skip":
             embed["color"] = COLOR_SKIP
-            embed["fields"].append({
-                "name": "Opus Skipped",
-                "value": "Grok: no significant change",
-            })
+            embed["fields"].append(
+                {
+                    "name": "Opus Skipped",
+                    "value": "Grok: no significant change",
+                }
+            )
 
         await self._send_embed(self.webhook_trades, embed)
 

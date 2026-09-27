@@ -1,12 +1,11 @@
 """Opus 4.6 クライアント - 最終売買判断エンジン"""
-import os
+
 import json
+import os
 import re
 import time
-from typing import Optional
 
 import anthropic
-
 
 OPUS_SYSTEM = """あなたはリスク管理を重視するポートフォリオマネージャーです。
 必ずアクションをJSON形式で返してください。
@@ -55,9 +54,7 @@ adjustments配列: ポジションサイズ縮小・ストップロス追加・�
 
 class OpusClient:
     def __init__(self):
-        self.client = anthropic.Anthropic(
-            api_key=os.getenv("ANTHROPIC_API_KEY")
-        )
+        self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         self.model = "claude-opus-4-6-20260205"
 
     def analyze(
@@ -68,16 +65,14 @@ class OpusClient:
         max_daily_loss: float,
         price_data: dict,
         grok_report: dict,
-    ) -> tuple[Optional[dict], int]:
+    ) -> tuple[dict | None, int]:
         """
         市場データとGrokレポートから売買判断を返す。
 
         Returns:
             (decision_dict or None, latency_ms)
         """
-        prompt = self._build_prompt(
-            balance, positions, daily_pnl, max_daily_loss, price_data, grok_report
-        )
+        prompt = self._build_prompt(balance, positions, daily_pnl, max_daily_loss, price_data, grok_report)
 
         start = time.time()
         try:
@@ -124,7 +119,7 @@ class OpusClient:
         )
 
 
-def parse_opus_response(raw: str) -> Optional[dict]:
+def parse_opus_response(raw: str) -> dict | None:
     """Opusの応答からJSONを抽出"""
     # 方法1: ```json ブロック
     match = re.search(r"```json\s*(.*?)\s*```", raw, re.DOTALL)
@@ -147,11 +142,15 @@ def parse_opus_response(raw: str) -> Optional[dict]:
 
 
 REQUIRED_FIELDS = [
-    "action", "symbol", "quantity", "reasoning", "confidence",
+    "action",
+    "symbol",
+    "quantity",
+    "reasoning",
+    "confidence",
 ]
 
 
-def _validate_decision(data: dict) -> Optional[dict]:
+def _validate_decision(data: dict) -> dict | None:
     """判断結果のバリデーションと正規化"""
     for field in REQUIRED_FIELDS:
         if field not in data:

@@ -6,6 +6,7 @@ EventBridge Scheduler invokes this function with {"task": ...}:
 
 Secrets are loaded from SSM before Sentry or any API client is initialised.
 """
+
 import asyncio
 import os
 
@@ -29,11 +30,20 @@ TASKS = ("trading_cycle", "emergency_check")
 
 
 def handler(event, context):
-    task = (event or {}).get("task", "trading_cycle")
+    event = event or {}
+    task = event.get("task", "trading_cycle")
     if task not in TASKS:
         raise ValueError(f"Unknown task: {task!r} (expected one of {sorted(TASKS)})")
+    # <aws.scheduler.scheduled-time> from template.yaml's Input - the intended
+    # fire time, not whenever this Lambda actually started. Absent for a
+    # manual invocation, in which case trading_core falls back to now().
+    scheduled_time = event.get("scheduled_time")
+    # Retry SSM on every invocation until it has succeeded once. The call at
+    # import time can fail on a cold start; without this, a warm container
+    # would keep skipping the drawdown monitor for as long as it lives.
+    load_secrets()
     # Resolved at call time rather than bound at import, so the job actually
     # invoked is the module attribute (patchable in tests, and re-imported
     # cleanly on a warm container).
-    asyncio.run(globals()[task]())
+    asyncio.run(globals()[task](scheduled_time=scheduled_time))
     return {"ok": True, "task": task}

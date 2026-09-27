@@ -1,9 +1,10 @@
 """Pytest fixtures and configuration"""
+
 import os
 import sys
-import pytest
-from unittest.mock import MagicMock, patch
 from datetime import datetime
+
+import pytest
 
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -65,7 +66,7 @@ def mock_account():
         "buying_power": 200000.0,
         "equity": 100000.0,
         "last_equity": 99500.0,
-        "daily_pnl": 500.0
+        "daily_pnl": 500.0,
     }
 
 
@@ -79,7 +80,7 @@ def mock_positions():
             "avg_entry_price": 350.0,
             "market_value": 3600.0,
             "unrealized_pl": 100.0,
-            "unrealized_plpc": 0.028
+            "unrealized_plpc": 0.028,
         },
         {
             "symbol": "TSLA",
@@ -87,8 +88,8 @@ def mock_positions():
             "avg_entry_price": 240.0,
             "market_value": 1250.0,
             "unrealized_pl": 50.0,
-            "unrealized_plpc": 0.04
-        }
+            "unrealized_plpc": 0.04,
+        },
     ]
 
 
@@ -99,7 +100,7 @@ def mock_market_data():
         "MSTR": {"price": 360.0, "change_5d": "+5.2%", "volume": 1000000},
         "TSLA": {"price": 250.0, "change_5d": "-2.1%", "volume": 5000000},
         "QQQ": {"price": 420.0, "change_5d": "+1.5%", "volume": 3000000},
-        "SPY": {"price": 485.0, "change_5d": "+0.8%", "volume": 4000000}
+        "SPY": {"price": 485.0, "change_5d": "+0.8%", "volume": 4000000},
     }
 
 
@@ -112,7 +113,7 @@ def mock_grok_response_buy():
         "quantity": 10,
         "order_type": "market",
         "reasoning": "BTC bullish momentum, MSTR correlation strong",
-        "confidence": 75
+        "confidence": 75,
     }
 
 
@@ -125,7 +126,7 @@ def mock_grok_response_hold():
         "quantity": 0,
         "order_type": "market",
         "reasoning": "Market uncertainty, waiting for clearer signals",
-        "confidence": 60
+        "confidence": 60,
     }
 
 
@@ -138,7 +139,7 @@ def mock_grok_response_sell():
         "quantity": 5,
         "order_type": "market",
         "reasoning": "Taking profits on position",
-        "confidence": 80
+        "confidence": 80,
     }
 
 
@@ -152,7 +153,7 @@ def mock_order_result():
         "qty": 10.0,
         "type": "market",
         "status": "filled",
-        "submitted_at": datetime.now().isoformat()
+        "submitted_at": datetime.now().isoformat(),
     }
 
 
@@ -172,6 +173,6 @@ def large_position():
             "avg_entry_price": 350.0,
             "market_value": 40000.0,
             "unrealized_pl": 5000.0,
-            "unrealized_plpc": 0.14
+            "unrealized_plpc": 0.14,
         }
     ]

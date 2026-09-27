@@ -1,8 +1,8 @@
 """Grok API クライアント - 市場情報収集 / 売買判断（DECISION_ENGINE=grok 時）"""
+
 import json
 import os
 import time
-from typing import Optional
 
 from openai import OpenAI
 
@@ -39,6 +39,9 @@ GROK_PROMPT_TEMPLATE = """以下のJSON形式で市場状況を報告してく�
 - VIXが急変
 それ以外は false にしてください。
 
+== 前回サイクルのセンチメント（比較用） ==
+{previous_sentiment}
+
 == 現在の市場データ ==
 {market_data}
 
@@ -46,27 +49,32 @@ GROK_PROMPT_TEMPLATE = """以下のJSON形式で市場状況を報告してく�
 {positions}
 """
 
+NO_PREVIOUS_SENTIMENT = "前回データなし"
+
 
 class GrokClient:
     def __init__(self):
-        self.client = OpenAI(
-            api_key=os.getenv("GROK_API_KEY"),
-            base_url="https://api.x.ai/v1"
-        )
+        self.client = OpenAI(api_key=os.getenv("GROK_API_KEY"), base_url="https://api.x.ai/v1")
         self.model = os.getenv("GROK_MODEL", "grok-3-mini")
 
     def collect_market_report(
         self,
         market_data: dict,
         positions: list[dict],
-    ) -> tuple[Optional[dict], int]:
+        previous_sentiment: str = NO_PREVIOUS_SENTIMENT,
+    ) -> tuple[dict | None, int]:
         """
         市場情報を収集してMarketReportを返す。判断はしない。
+
+        previous_sentiment: 直前サイクルのセンチメント要約（trading_core が
+        DynamoDB から引いて渡す）。呼び出しごとに独立した API 呼び出しである
+        Grok 自身は前回の会話を覚えていないため、「前回から大きく変動」を
+        判定させるにはこちらから明示的に渡す必要がある。
 
         Returns:
             (report_dict or None, latency_ms)
         """
-        prompt = self._build_prompt(market_data, positions)
+        prompt = self._build_prompt(market_data, positions, previous_sentiment)
 
         start = time.time()
         try:
@@ -98,7 +106,7 @@ class GrokClient:
         max_daily_loss: float,
         price_data: dict,
         grok_report: dict,
-    ) -> tuple[Optional[dict], int]:
+    ) -> tuple[dict | None, int]:
         """
         市場データと自身のレポートから売買判断を返す（OpusClient.analyze と同じ契約）。
 
@@ -137,6 +145,7 @@ class GrokClient:
         self,
         market_data: dict,
         positions: list[dict],
+        previous_sentiment: str = NO_PREVIOUS_SENTIMENT,
     ) -> str:
         market_str = json.dumps(market_data, indent=2)
         positions_str = json.dumps(positions, indent=2) if positions else "None"
@@ -144,9 +153,10 @@ class GrokClient:
         return GROK_PROMPT_TEMPLATE.format(
             market_data=market_str,
             positions=positions_str,
+            previous_sentiment=previous_sentiment,
         )
 
-    def _parse_response(self, raw: str) -> Optional[dict]:
+    def _parse_response(self, raw: str) -> dict | None:
         """レスポンスをパースしてMarketReportを返す"""
         try:
             # JSONブロック抽出（```json ... ``` 対応）
@@ -155,7 +165,7 @@ class GrokClient:
                 end = raw.rfind("}") + 1
                 raw = raw[start:end]
 
-            data = json.loads(raw)
+            data: dict = json.loads(raw)
 
             # 必須フィールド検証
             if "significant_change" not in data:

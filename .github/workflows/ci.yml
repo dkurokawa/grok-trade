@@ -40,23 +40,24 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.lock
+            backend/requirements-dev.txt
 
       - name: Install dependencies
         working-directory: backend
-        run: |
-          pip install -r requirements.txt
-          pip install ruff mypy
+        run: pip install -r requirements.lock -r requirements-dev.txt
 
       - name: Run Ruff
         working-directory: backend
         run: ruff check . --output-format=github
-        continue-on-error: true
+      - name: Ruff format check
+        working-directory: backend
+        run: ruff format --check .
 
       - name: Run MyPy
         working-directory: backend
         run: mypy . --ignore-missing-imports
-        continue-on-error: true
 
   # ===========================================
   # Step 2: Unit Tests
@@ -73,13 +74,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.lock
+            backend/requirements-dev.txt
 
       - name: Install dependencies
         working-directory: backend
-        run: |
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-cov 'moto[dynamodb]'
+        run: pip install -r requirements.lock -r requirements-dev.txt
 
       - name: Run unit tests
         working-directory: backend
@@ -113,7 +114,51 @@ jobs:
           retention-days: 7
 
   # ===========================================
-  # Step 3: Validate & build the SAM stack (PR gate)
+  # Step 3: Dashboard (Next.js) build check
+  # ===========================================
+  dashboard:
+    name: Dashboard Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Type check
+        working-directory: dashboard
+        run: npx tsc --noEmit
+
+      - name: Lint (if ESLint is configured)
+        working-directory: dashboard
+        run: |
+          if ls .eslintrc* eslint.config.* >/dev/null 2>&1; then
+            npx next lint
+          else
+            echo "No ESLint config found - skipping next lint"
+          fi
+
+      - name: Build
+        working-directory: dashboard
+        env:
+          # Dummy values so the build (and its type-checked route handlers)
+          # compile cleanly; no real backend/dashboard credentials needed.
+          API_URL: http://localhost:8000
+          API_SHARED_SECRET: ci-dummy-secret
+          DASHBOARD_USER: ci-dummy-user
+          DASHBOARD_PASSWORD: ci-dummy-password
+        run: npm run build
+
+  # ===========================================
+  # Step 4: Validate & build the SAM stack (PR gate)
   # ===========================================
   build:
     name: SAM Validate & Build
@@ -140,12 +185,12 @@ jobs:
         run: sam build
 
   # ===========================================
-  # Step 4: Deploy to production (main only)
+  # Step 5: Deploy to production (main only)
   # ===========================================
   deploy:
     name: Deploy (AWS SAM)
     runs-on: ubuntu-latest
-    needs: [build]
+    needs: [build, dashboard]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment:
       name: production
@@ -193,13 +238,38 @@ jobs:
           echo "API URL: $API_URL"
           echo "API_URL=$API_URL" >> "$GITHUB_ENV"
 
-      - name: Smoke test deployed API
+      - name: Resolve API shared secret from SSM
+        id: secret
         run: |
+          SECRET=$(aws ssm get-parameter --region "$AWS_REGION" \
+            --name "/grok-trade/API_SHARED_SECRET" \
+            --with-decryption --query Parameter.Value --output text)
+          echo "::add-mask::$SECRET"
+          echo "api_shared_secret=$SECRET" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test deployed API
+        env:
+          API_SHARED_SECRET: ${{ steps.secret.outputs.api_shared_secret }}
+        run: |
+          # F7: deploy.sh の手動デプロイと同じ基準で確認する - HTTP 200 では
+          # なく /health の status が "ok" であること (secrets 未設定の
+          # "degraded" は 200 を返すので、コード自体だけでは検出できない)。
           for i in 1 2 3 4 5; do
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL%/}/health" --max-time 30 || echo 000)
-            echo "attempt $i -> $CODE"
-            [ "$CODE" = "200" ] && exit 0
+            HEALTH_BODY=$(curl -sf "${API_URL%/}/health" --max-time 30 || echo "")
+            STATUS=$(echo "$HEALTH_BODY" | jq -r '.status // empty' 2>/dev/null || echo "")
+            echo "attempt $i -> status=${STATUS:-<unreachable>}"
+            [ "$STATUS" = "ok" ] && break
+            if [ "$i" = 5 ]; then
+              echo "Health check failed after deploy (status=${STATUS:-<unreachable>})"
+              exit 1
+            fi
             sleep 10
           done
-          echo "Health check failed after deploy"
-          exit 1
+
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "x-api-key: $API_SHARED_SECRET" \
+            "${API_URL%/}/status" --max-time 30 || echo 000)
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "/status (x-api-key 付き) が 200 を返さなかった (got $STATUS_CODE)"
+            exit 1
+          fi
+          echo "/status (x-api-key 付き) が 200 を返した"

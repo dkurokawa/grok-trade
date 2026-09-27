@@ -5,30 +5,36 @@ Run with: pytest tests/test_production_e2e.py -v
 
 Environment variables required:
 - PRODUCTION_API_URL: The production API URL (e.g., https://your-app.railway.app)
+- PRODUCTION_API_SHARED_SECRET: The API_SHARED_SECRET registered in SSM. Every
+  endpoint except /health now requires it (x-api-key header).
 
 Schedule: Avoid market open rush hours
 - US Market opens: 9:30 AM ET = 14:30 UTC
 - Avoid: 14:00-15:00 UTC (30 min before/after open)
 - Best times: 16:00-20:00 UTC (mid-session) or 00:00-13:00 UTC (pre-market)
 """
-import pytest
+
 import os
+from datetime import UTC, datetime
+
 import httpx
-from datetime import datetime, timezone
+import pytest
 
 # Production API URL from environment
 PRODUCTION_URL = os.getenv("PRODUCTION_API_URL", "")
+PRODUCTION_API_SHARED_SECRET = os.getenv("PRODUCTION_API_SHARED_SECRET", "")
+AUTH_HEADERS = {"x-api-key": PRODUCTION_API_SHARED_SECRET}
 
-# Skip all tests if no production URL configured
+# Skip all tests if no production URL/secret configured
 pytestmark = pytest.mark.skipif(
-    not PRODUCTION_URL,
-    reason="PRODUCTION_API_URL not set"
+    not PRODUCTION_URL or not PRODUCTION_API_SHARED_SECRET,
+    reason="PRODUCTION_API_URL / PRODUCTION_API_SHARED_SECRET not set",
 )
 
 
 def is_market_open_rush_hour() -> bool:
     """Check if current time is during market open rush (14:00-15:00 UTC)"""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # Market open rush: 14:00-15:00 UTC (9:00-10:00 AM ET)
     return 14 <= now.hour < 15
 
@@ -43,12 +49,12 @@ class TestProductionHealth:
 
     def test_health_endpoint_responds(self, client):
         """Test /health endpoint returns 200"""
-        response = client.get(f"{PRODUCTION_URL}/health")
+        response = client.get(f"{PRODUCTION_URL}/health", headers=AUTH_HEADERS)
         assert response.status_code == 200, f"Health check failed: {response.text}"
 
     def test_health_returns_valid_json(self, client):
         """Test /health returns valid JSON structure"""
-        response = client.get(f"{PRODUCTION_URL}/health")
+        response = client.get(f"{PRODUCTION_URL}/health", headers=AUTH_HEADERS)
         data = response.json()
 
         assert "status" in data, "Missing 'status' field"
@@ -59,8 +65,9 @@ class TestProductionHealth:
     def test_health_response_time(self, client):
         """Test /health responds within acceptable time"""
         import time
+
         start = time.time()
-        response = client.get(f"{PRODUCTION_URL}/health")
+        response = client.get(f"{PRODUCTION_URL}/health", headers=AUTH_HEADERS)
         elapsed = time.time() - start
 
         assert response.status_code == 200
@@ -76,12 +83,12 @@ class TestProductionStatus:
 
     def test_status_endpoint_responds(self, client):
         """Test /status endpoint returns 200"""
-        response = client.get(f"{PRODUCTION_URL}/status")
+        response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         assert response.status_code == 200, f"Status check failed: {response.text}"
 
     def test_status_returns_account_info(self, client):
         """Test /status returns account information"""
-        response = client.get(f"{PRODUCTION_URL}/status")
+        response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         data = response.json()
 
         assert "account" in data, "Missing 'account' field"
@@ -91,7 +98,7 @@ class TestProductionStatus:
 
     def test_status_returns_positions(self, client):
         """Test /status returns positions array"""
-        response = client.get(f"{PRODUCTION_URL}/status")
+        response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         data = response.json()
 
         assert "positions" in data, "Missing 'positions' field"
@@ -99,7 +106,7 @@ class TestProductionStatus:
 
     def test_status_returns_scheduler_state(self, client):
         """Test /status returns scheduler state"""
-        response = client.get(f"{PRODUCTION_URL}/status")
+        response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         data = response.json()
 
         assert "scheduler_running" in data, "Missing 'scheduler_running' field"
@@ -115,12 +122,12 @@ class TestProductionDataEndpoints:
 
     def test_trades_endpoint_responds(self, client):
         """Test /trades endpoint returns 200"""
-        response = client.get(f"{PRODUCTION_URL}/trades")
+        response = client.get(f"{PRODUCTION_URL}/trades", headers=AUTH_HEADERS)
         assert response.status_code == 200
 
     def test_trades_returns_list(self, client):
         """Test /trades returns trades list"""
-        response = client.get(f"{PRODUCTION_URL}/trades")
+        response = client.get(f"{PRODUCTION_URL}/trades", headers=AUTH_HEADERS)
         data = response.json()
 
         assert "trades" in data, "Missing 'trades' field"
@@ -128,19 +135,19 @@ class TestProductionDataEndpoints:
 
     def test_trades_with_limit(self, client):
         """Test /trades respects limit parameter"""
-        response = client.get(f"{PRODUCTION_URL}/trades?limit=5")
+        response = client.get(f"{PRODUCTION_URL}/trades?limit=5", headers=AUTH_HEADERS)
         assert response.status_code == 200
         data = response.json()
         assert len(data["trades"]) <= 5
 
     def test_decisions_endpoint_responds(self, client):
         """Test /decisions endpoint returns 200"""
-        response = client.get(f"{PRODUCTION_URL}/decisions")
+        response = client.get(f"{PRODUCTION_URL}/decisions", headers=AUTH_HEADERS)
         assert response.status_code == 200
 
     def test_decisions_returns_list(self, client):
         """Test /decisions returns decisions list"""
-        response = client.get(f"{PRODUCTION_URL}/decisions")
+        response = client.get(f"{PRODUCTION_URL}/decisions", headers=AUTH_HEADERS)
         data = response.json()
 
         assert "decisions" in data, "Missing 'decisions' field"
@@ -154,13 +161,10 @@ class TestProductionAvoidRushHour:
     def client(self):
         return httpx.Client(timeout=30.0)
 
-    @pytest.mark.skipif(
-        is_market_open_rush_hour(),
-        reason="Skipping during market open rush hour (14:00-15:00 UTC)"
-    )
+    @pytest.mark.skipif(is_market_open_rush_hour(), reason="Skipping during market open rush hour (14:00-15:00 UTC)")
     def test_full_status_during_off_peak(self, client):
         """Full status check during off-peak hours"""
-        response = client.get(f"{PRODUCTION_URL}/status")
+        response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         assert response.status_code == 200
 
         data = response.json()
@@ -170,7 +174,7 @@ class TestProductionAvoidRushHour:
         assert "scheduler_running" in data
 
         # Log current state for monitoring
-        print(f"\n📊 Production Status:")
+        print("\n📊 Production Status:")
         print(f"  Cash: ${data['account'].get('cash', 0):,.2f}")
         print(f"  Portfolio: ${data['account'].get('portfolio_value', 0):,.2f}")
         print(f"  Positions: {len(data['positions'])}")
@@ -186,12 +190,12 @@ class TestProductionErrorHandling:
 
     def test_invalid_endpoint_returns_404(self, client):
         """Test invalid endpoint returns 404"""
-        response = client.get(f"{PRODUCTION_URL}/invalid-endpoint-xyz")
+        response = client.get(f"{PRODUCTION_URL}/invalid-endpoint-xyz", headers=AUTH_HEADERS)
         assert response.status_code == 404
 
     def test_invalid_limit_returns_422(self, client):
         """Test invalid query parameter returns 422"""
-        response = client.get(f"{PRODUCTION_URL}/trades?limit=invalid")
+        response = client.get(f"{PRODUCTION_URL}/trades?limit=invalid", headers=AUTH_HEADERS)
         assert response.status_code == 422
 
 
@@ -214,7 +218,7 @@ class TestProductionSmokeTest:
         results = []
         for endpoint, expected_status in endpoints:
             try:
-                response = client.get(f"{PRODUCTION_URL}{endpoint}")
+                response = client.get(f"{PRODUCTION_URL}{endpoint}", headers=AUTH_HEADERS)
                 success = response.status_code == expected_status
                 results.append((endpoint, success, response.status_code))
             except Exception as e:
@@ -241,7 +245,7 @@ class TestProductionSchedulerControl:
 
     def test_scheduler_status_in_health(self, client):
         """Test scheduler status is reported in health endpoint"""
-        response = client.get(f"{PRODUCTION_URL}/health")
+        response = client.get(f"{PRODUCTION_URL}/health", headers=AUTH_HEADERS)
         assert response.status_code == 200
         data = response.json()
         assert "scheduler_running" in data
@@ -249,7 +253,7 @@ class TestProductionSchedulerControl:
 
     def test_scheduler_status_in_status(self, client):
         """Test scheduler status is reported in status endpoint"""
-        response = client.get(f"{PRODUCTION_URL}/status")
+        response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         assert response.status_code == 200
         data = response.json()
         assert "scheduler_running" in data
@@ -264,7 +268,7 @@ class TestProductionAccountData:
 
     def test_account_has_required_fields(self, client):
         """Test account data has all required fields"""
-        response = client.get(f"{PRODUCTION_URL}/status")
+        response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         assert response.status_code == 200
         data = response.json()
 
@@ -276,7 +280,7 @@ class TestProductionAccountData:
 
     def test_account_values_are_numeric(self, client):
         """Test account values are numeric types"""
-        response = client.get(f"{PRODUCTION_URL}/status")
+        response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         data = response.json()
 
         account = data.get("account", {})
@@ -286,7 +290,7 @@ class TestProductionAccountData:
 
     def test_positions_are_list(self, client):
         """Test positions is a list"""
-        response = client.get(f"{PRODUCTION_URL}/status")
+        response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         data = response.json()
 
         assert "positions" in data
@@ -302,7 +306,7 @@ class TestProductionTradeHistory:
 
     def test_trades_structure(self, client):
         """Test trades response structure"""
-        response = client.get(f"{PRODUCTION_URL}/trades?limit=10")
+        response = client.get(f"{PRODUCTION_URL}/trades?limit=10", headers=AUTH_HEADERS)
         assert response.status_code == 200
         data = response.json()
 
@@ -315,7 +319,7 @@ class TestProductionTradeHistory:
 
     def test_decisions_structure(self, client):
         """Test decisions response structure"""
-        response = client.get(f"{PRODUCTION_URL}/decisions?limit=10")
+        response = client.get(f"{PRODUCTION_URL}/decisions?limit=10", headers=AUTH_HEADERS)
         assert response.status_code == 200
         data = response.json()
 
@@ -328,8 +332,8 @@ class TestProductionTradeHistory:
 
     def test_trades_limit_works(self, client):
         """Test trades limit parameter works correctly"""
-        response1 = client.get(f"{PRODUCTION_URL}/trades?limit=1")
-        response2 = client.get(f"{PRODUCTION_URL}/trades?limit=5")
+        response1 = client.get(f"{PRODUCTION_URL}/trades?limit=1", headers=AUTH_HEADERS)
+        response2 = client.get(f"{PRODUCTION_URL}/trades?limit=5", headers=AUTH_HEADERS)
 
         assert response1.status_code == 200
         assert response2.status_code == 200
@@ -351,8 +355,9 @@ class TestProductionPerformance:
     def test_health_response_time_under_1s(self, client):
         """Test health endpoint responds under 1 second"""
         import time
+
         start = time.time()
-        response = client.get(f"{PRODUCTION_URL}/health")
+        response = client.get(f"{PRODUCTION_URL}/health", headers=AUTH_HEADERS)
         elapsed = time.time() - start
 
         assert response.status_code == 200
@@ -361,8 +366,9 @@ class TestProductionPerformance:
     def test_status_response_time_under_5s(self, client):
         """Test status endpoint responds under 5 seconds"""
         import time
+
         start = time.time()
-        response = client.get(f"{PRODUCTION_URL}/status")
+        response = client.get(f"{PRODUCTION_URL}/status", headers=AUTH_HEADERS)
         elapsed = time.time() - start
 
         assert response.status_code == 200
@@ -371,8 +377,9 @@ class TestProductionPerformance:
     def test_trades_response_time_under_5s(self, client):
         """Test trades endpoint responds under 5 seconds"""
         import time
+
         start = time.time()
-        response = client.get(f"{PRODUCTION_URL}/trades?limit=50")
+        response = client.get(f"{PRODUCTION_URL}/trades?limit=50", headers=AUTH_HEADERS)
         elapsed = time.time() - start
 
         assert response.status_code == 200
@@ -390,19 +397,19 @@ class TestProductionResilience:
         """Test system handles multiple rapid requests"""
         results = []
         for _ in range(5):
-            response = client.get(f"{PRODUCTION_URL}/health")
+            response = client.get(f"{PRODUCTION_URL}/health", headers=AUTH_HEADERS)
             results.append(response.status_code)
 
         assert all(status == 200 for status in results), "Some rapid requests failed"
 
     def test_large_limit_parameter(self, client):
         """Test system handles large limit parameter"""
-        response = client.get(f"{PRODUCTION_URL}/trades?limit=1000")
+        response = client.get(f"{PRODUCTION_URL}/trades?limit=1000", headers=AUTH_HEADERS)
         assert response.status_code == 200
 
     def test_concurrent_endpoints(self, client):
         """Test accessing different endpoints in sequence"""
         endpoints = ["/health", "/status", "/trades", "/decisions", "/health"]
         for endpoint in endpoints:
-            response = client.get(f"{PRODUCTION_URL}{endpoint}")
+            response = client.get(f"{PRODUCTION_URL}{endpoint}", headers=AUTH_HEADERS)
             assert response.status_code == 200, f"Failed on {endpoint}"

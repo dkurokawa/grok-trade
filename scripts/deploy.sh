@@ -27,7 +27,7 @@ ok "AWS アカウント $ACCOUNT / リージョン $REGION"
 
 # ------------------------------------------------------------ 2. シークレット
 step "2/5 シークレット (SSM Parameter Store)"
-REQUIRED=(GROK_API_KEY ALPACA_API_KEY ALPACA_SECRET_KEY)
+REQUIRED=(GROK_API_KEY ALPACA_API_KEY ALPACA_SECRET_KEY API_SHARED_SECRET)
 EXISTING=$(aws ssm get-parameters-by-path --region "$REGION" --path "$PREFIX" \
   --query "Parameters[].Name" --output text 2>/dev/null || true)
 
@@ -109,7 +109,22 @@ done
 curl -s "${API_URL%/}/health" --max-time 30; echo
 
 SECRET=$(aws ssm get-parameter --region "$REGION" --name "$PREFIX/API_SHARED_SECRET" \
-  --with-decryption --query Parameter.Value --output text 2>/dev/null || echo "")
+  --with-decryption --query Parameter.Value --output text 2>/dev/null) \
+  || die "API_SHARED_SECRET の取得に失敗した (SSM: $PREFIX/API_SHARED_SECRET)"
+[ -n "$SECRET" ] && [ "$SECRET" != "None" ] \
+  || die "API_SHARED_SECRET が空だった (SSM: $PREFIX/API_SHARED_SECRET)"
+
+STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "x-api-key: $SECRET" \
+  "${API_URL%/}/status" --max-time 30 || echo 000)
+[ "$STATUS_CODE" = "200" ] \
+  || die "/status (x-api-key 付き) が 200 を返さなかった (got $STATUS_CODE)"
+ok "/status (x-api-key 付き) が 200 を返した"
+
+# Never print the decrypted secret itself - length + sha256 prefix are enough
+# to sanity-check it was fetched, without putting the value in a terminal
+# scrollback or CI log.
+SECRET_LEN=$(printf '%s' "$SECRET" | wc -c | tr -d ' ')
+SECRET_SHA=$(printf '%s' "$SECRET" | shasum -a 256 | cut -c1-12)
 
 cat <<EOF
 
@@ -119,15 +134,21 @@ cat <<EOF
   API URL : $API_URL
   取引    : 市場時間中 30分ごとに EventBridge Scheduler が起動
 
-ダッシュボード (Vercel) に設定する環境変数:
+  API_SHARED_SECRET: 長さ $SECRET_LEN 文字 / sha256先頭12桁 $SECRET_SHA
+  (値そのものはここに表示しない。取得し直すには:
+   aws ssm get-parameter --region "$REGION" --name "$PREFIX/API_SHARED_SECRET" --with-decryption --query Parameter.Value --output text)
 
-  NEXT_PUBLIC_API_URL=$API_URL
-  API_SHARED_SECRET=$SECRET
+ダッシュボード (Vercel) に設定する環境変数（すべてサーバー専用。NEXT_PUBLIC_ は付けない）:
 
-  ※ API_SHARED_SECRET に NEXT_PUBLIC_ は付けないこと
-     (付けるとブラウザのバンドルから読めてしまう)
+  API_URL=$API_URL
+  API_SHARED_SECRET=<上記のシークレット。値は手元で取得して貼る>
+  DASHBOARD_USER=<ダッシュボード全体を守る Basic 認証のユーザー名>
+  DASHBOARD_PASSWORD=<同・パスワード>
 
-停止 / 再開:
+  ※ API_SHARED_SECRET / DASHBOARD_USER / DASHBOARD_PASSWORD に
+     NEXT_PUBLIC_ は付けないこと (付けるとブラウザのバンドルから読めてしまう)
+
+停止 / 再開 (値は上のコマンドで取得してから):
 
   curl -X POST "${API_URL%/}/stop"  -H "x-api-key: \$SECRET"
   curl -X POST "${API_URL%/}/start" -H "x-api-key: \$SECRET"

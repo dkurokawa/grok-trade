@@ -26,6 +26,8 @@ htmlcov/
 node_modules/
 .next/
 out/
+next-env.d.ts
+*.tsbuildinfo
 
 # IDE
 .idea/
@@ -50,3 +52,7 @@ sql/
 
 # Lambda package size-test scratch (vendored deps)
 backend/sizetest/
+
+# uv project-mode lock (unused - we pin with requirements.lock /
+# requirements-dev.txt instead, compiled via `uv pip compile`)
+backend/uv.lock

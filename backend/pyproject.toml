@@ -2,11 +2,13 @@
 name = "grok-trade"
 version = "1.0.0"
 description = "Grok AI powered trading bot"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py311"
 line-length = 120
+
+[tool.ruff.lint]
 select = [
     "E",    # pycodestyle errors
     "W",    # pycodestyle warnings
@@ -26,7 +28,7 @@ ignore = [
 known-first-party = ["db", "grok_client", "risk_guard", "trader", "discord_notifier"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = false  # 段階的に有効化
@@ -35,6 +37,11 @@ exclude = [
     "tests/",
     ".venv/",
 ]
+
+# 取引経路（判断→検証→執行）は他より厳しく: 関数の引数・戻り値の型注釈を必須にする。
+[[tool.mypy.overrides]]
+module = ["trading_core", "risk_guard", "decision_schema", "trader"]
+disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

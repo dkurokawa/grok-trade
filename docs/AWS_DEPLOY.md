@@ -5,8 +5,8 @@ Fly.io の常駐コンテナ構成から、AWS のサーバーレス構成へ移
 ## 構成
 
 ```
-EventBridge Scheduler ──30分ごと（平日 9:00-15:30 ET）──> Lambda[grok-trade-trading] ──┐
-                     └─5分ごと（task=emergency_check）──>                              │
+EventBridge Scheduler ──30分ごと（平日 9:30-15:30 ET）──> Lambda[grok-trade-trading] ──┐
+                     └─5分ごと（平日 9:30-15:55 ET, task=emergency_check）──>          │
                                                                                        ├──> DynamoDB (on-demand)
 Dashboard ──HTTPS──> Lambda Function URL ──> Lambda[grok-trade-api] ───────────────────┘
                                             (FastAPI + Mangum)
@@ -28,7 +28,7 @@ Dashboard ──HTTPS──> Lambda Function URL ──> Lambda[grok-trade-api] 
 | Fly secrets | SSM Parameter Store (SecureString) |
 
 **コスト**: Lambda・EventBridge Scheduler・DynamoDB はいずれも無料枠内
-（取引サイクル 14回/日 + 緊急チェック 84回/日 ≒ 月2,000回）。
+（取引サイクル 13回/日 + 緊急チェック 78回/日 ≒ 月1,900回）。
 zip パッケージ方式のためコンテナレジストリ(ECR)の保管料もかからず、
 デプロイ成果物を置く S3 の数十 MB 分のみ。**実質 月 $0〜1**（旧構成は月約 $17）。
 
@@ -143,16 +143,21 @@ vault 内で以下のいずれかの形になっていれば自動で見つか�
 
 ### ダッシュボードの向き先を変更
 
-Vercel（または `.env.local`）で以下を設定する:
+Vercel（または `.env.local`）で以下を設定する（詳細は
+[dashboard/.env.example](../dashboard/.env.example)）:
 
 ```
-NEXT_PUBLIC_API_URL=<上で取得した Function URL>
+API_URL=<上で取得した Function URL>
 API_SHARED_SECRET=<手順2で生成した共有シークレット>
+DASHBOARD_USER=<ダッシュボード全体を守る Basic 認証のユーザー名>
+DASHBOARD_PASSWORD=<同・パスワード>
 ```
 
-`API_SHARED_SECRET` は **`NEXT_PUBLIC_` を付けない**こと。付けるとブラウザのバンドルに
-埋め込まれて誰でも読める。ダッシュボードの開始/停止ボタンはサーバー側の API ルート
-(`/api/control`) を経由し、そこでシークレットを付与して backend を叩く。
+いずれも **`NEXT_PUBLIC_` を付けない**こと。付けるとブラウザのバンドルに埋め込まれて
+誰でも読める。ブラウザは backend を直接叩かず、ダッシュボードのサーバー側ルート
+(`/api/control` が start/stop、`/api/backend/[...path]` が status/trades/decisions/pipeline)
+がここでシークレットを付与して中継する。ダッシュボード自体は `src/middleware.ts` の
+HTTP Basic 認証（`DASHBOARD_USER`/`DASHBOARD_PASSWORD`、どちらか未設定なら 503）で守る。
 
 ### GitHub Actions 用の設定（CI から自動デプロイする場合）
 
@@ -183,7 +188,9 @@ aws lambda invoke --function-name grok-trade-trading \
   --payload '{"task": "emergency_check"}' /dev/stdout
 ```
 
-停止フラグが立っていると、どちらも何もせずに終了する。
+停止フラグが立っていると `trading_cycle` は何もせずに終了する。`emergency_check` は
+停止フラグを見ない（一時停止中でもドローダウン監視・清算は動く。AI キーの有無も見ない。
+Alpaca のキーがあれば動く）。
 
 ### 緊急停止 / 再開
 

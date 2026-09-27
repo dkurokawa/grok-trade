@@ -1,18 +1,22 @@
 """Discord Notifier unit tests - pipeline embed + legacy notification tests"""
-import pytest
+
 import os
-from unittest.mock import patch, MagicMock, AsyncMock
-import httpx
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from discord_notifier import DiscordNotifier
 
 
 class TestDiscordNotifierInit:
     def test_init_with_env_vars(self):
-        with patch.dict(os.environ, {
-            "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
-            "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
+                "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
+            },
+        ):
             notifier = DiscordNotifier()
             assert notifier.webhook_trades == "https://discord.com/trades"
             assert notifier.webhook_alerts == "https://discord.com/alerts"
@@ -27,10 +31,13 @@ class TestDiscordNotifierInit:
 class TestSendEmbed:
     @pytest.fixture
     def notifier(self):
-        with patch.dict(os.environ, {
-            "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
-            "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
+                "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
+            },
+        ):
             return DiscordNotifier()
 
     @pytest.mark.asyncio
@@ -53,10 +60,13 @@ class TestSendEmbed:
 class TestSendPipelineLog:
     @pytest.fixture
     def notifier(self):
-        with patch.dict(os.environ, {
-            "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
-            "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
+                "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
+            },
+        ):
             return DiscordNotifier()
 
     @pytest.mark.asyncio
@@ -113,9 +123,7 @@ class TestSendPipelineLog:
                 "confidence": 72,
                 "risk_assessment": "medium",
                 "reasoning": "test",
-                "adjustments": [
-                    {"field": "position_size_pct", "original": 50, "adjusted": 35, "reason": "VIX high"}
-                ],
+                "adjustments": [{"field": "position_size_pct", "original": 50, "adjusted": 35, "reason": "VIX high"}],
             }
             await notifier.send_pipeline_log("abc12345", "opus_decision", data)
             embed = mock.call_args.args[1]
@@ -135,9 +143,7 @@ class TestSendPipelineLog:
         with patch.object(notifier, "_send_embed", new_callable=AsyncMock) as mock:
             data = {
                 "passed": True,
-                "adjustments": [
-                    {"field": "position_size_pct", "original": 60, "adjusted": 50, "reason": "limit"}
-                ],
+                "adjustments": [{"field": "position_size_pct", "original": 60, "adjusted": 50, "reason": "limit"}],
             }
             await notifier.send_pipeline_log("abc12345", "risk_guard", data)
             embed = mock.call_args.args[1]
@@ -165,10 +171,13 @@ class TestSendPipelineLog:
 class TestNotifyTrade:
     @pytest.fixture
     def notifier(self):
-        with patch.dict(os.environ, {
-            "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
-            "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
+                "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
+            },
+        ):
             return DiscordNotifier()
 
     @pytest.mark.asyncio
@@ -193,10 +202,13 @@ class TestNotifyTrade:
 class TestNotifyAlert:
     @pytest.fixture
     def notifier(self):
-        with patch.dict(os.environ, {
-            "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
-            "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
+                "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
+            },
+        ):
             return DiscordNotifier()
 
     @pytest.mark.asyncio
@@ -218,10 +230,13 @@ class TestNotifyAlert:
 class TestNotifySystemStop:
     @pytest.fixture
     def notifier(self):
-        with patch.dict(os.environ, {
-            "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
-            "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
+                "DISCORD_WEBHOOK_ALERTS": "https://discord.com/alerts",
+            },
+        ):
             return DiscordNotifier()
 
     @pytest.mark.asyncio
@@ -236,9 +251,12 @@ class TestNotifySystemStop:
 class TestNotifyDailySummary:
     @pytest.fixture
     def notifier(self):
-        with patch.dict(os.environ, {
-            "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_WEBHOOK_TRADES": "https://discord.com/trades",
+            },
+        ):
             return DiscordNotifier()
 
     @pytest.mark.asyncio
