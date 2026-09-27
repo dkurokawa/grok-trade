@@ -106,7 +106,7 @@ class TestStopStartEndpoints:
     def test_wrong_secret_rejected(self, client):
         assert client.post("/stop", headers={"x-api-key": "nope"}).status_code == 401
 
-    def test_stop_then_start_toggles_state(self, client):
+    def test_stop_then_start_toggles_state(self, client, mock_trader):
         import db.dynamo as dyn
 
         headers = {"x-api-key": SECRET}
@@ -117,9 +117,25 @@ class TestStopStartEndpoints:
         assert client.post("/start", headers=headers).json()["status"] == "running"
         assert dyn.get_scheduler_state() is True
 
-    def test_stop_notifies(self, client, mock_notifier):
+    def test_stop_notifies(self, client, mock_notifier, mock_trader):
         client.post("/stop", headers={"x-api-key": SECRET})
         mock_notifier.notify_system_stop.assert_awaited_once()
+
+    def test_stop_cancels_open_buy_orders(self, client, mock_trader):
+        mock_trader.cancel_open_buy_orders.return_value = 2
+        r = client.post("/stop", headers={"x-api-key": SECRET})
+        assert r.status_code == 200
+        assert r.json()["cancelled_buy_orders"] == 2
+        mock_trader.cancel_open_buy_orders.assert_called_once()
+
+    def test_stop_reports_500_when_cancel_fails_but_stays_stopped(self, client, mock_trader):
+        import db.dynamo as dyn
+
+        mock_trader.cancel_open_buy_orders.side_effect = RuntimeError("Alpaca down")
+        r = client.post("/stop", headers={"x-api-key": SECRET})
+        assert r.status_code == 500
+        assert "cancelling open buy orders failed" in r.json()["detail"]
+        assert dyn.get_scheduler_state() is False
 
     def test_stop_returns_500_when_write_fails(self, client, monkeypatch):
         def boom(_running):

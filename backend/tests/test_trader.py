@@ -5,6 +5,7 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from alpaca.trading.enums import OrderSide
 
 from trader import DuplicateOrderError, Trader
 
@@ -928,6 +929,39 @@ class TestClientOrderIdDedup:
         http_error.response.status_code = 422
         return APIError('{"code": 42910000, "message": "client_order_id must be unique"}', http_error)
 
+    def test_timeout_after_acceptance_returns_the_accepted_order(self, trader):
+        """A submit that times out may already have been accepted - look it up."""
+        t, mock_client = trader
+        accepted = self._mock_order()
+        mock_client.get_order_by_client_id.side_effect = [self._not_found(), accepted]
+        mock_client.submit_order.side_effect = TimeoutError("read timed out")
+
+        result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+        assert result is not None
+        assert result["order_id"] == "order-1"
+        assert result["status"] == "accepted"
+
+    def test_timeout_with_unconfirmable_state_raises(self, trader):
+        from trader import OrderStateUnknown
+
+        t, mock_client = trader
+        mock_client.get_order_by_client_id.side_effect = [self._not_found(), ConnectionError("down")]
+        mock_client.submit_order.side_effect = TimeoutError("read timed out")
+
+        with pytest.raises(OrderStateUnknown):
+            t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
+
+    def test_cancel_open_buy_orders_leaves_sell_legs(self, trader):
+        t, mock_client = trader
+        buy, sell = MagicMock(), MagicMock()
+        buy.side, buy.id = OrderSide.BUY, "b1"
+        sell.side, sell.id = OrderSide.SELL, "s1"
+        mock_client.get_orders.return_value = [buy, sell]
+
+        assert t.cancel_open_buy_orders() == 1
+        mock_client.cancel_order_by_id.assert_called_once_with("b1")
+
     def test_client_order_id_is_sent_on_the_request(self, trader):
         t, mock_client = trader
         mock_client.get_order_by_client_id.side_effect = self._not_found()
@@ -1028,8 +1062,8 @@ class TestClientOrderIdDedup:
         assert result is None
 
     def test_submit_error_other_status_not_treated_as_duplicate(self, trader):
-        """422 以外の submit_order エラーは、もう一度の確認すら行わず
-        従来どおり None を返す。"""
+        """422 以外の submit_order エラーは重複扱いしない。受理されていないこと
+        （404）を確かめたうえで「発注失敗」として None を返す。"""
         from alpaca.common.exceptions import APIError
 
         t, mock_client = trader
@@ -1041,5 +1075,5 @@ class TestClientOrderIdDedup:
         result = t.execute_order("MSTR", "buy", 7, client_order_id="gt-20260101T0930-MSTR-buy")
 
         assert result is None
-        # only the pre-submit confirmation call, no post-submit re-check
-        assert mock_client.get_order_by_client_id.call_count == 1
+        # pre-submit confirmation + one post-failure lookup
+        assert mock_client.get_order_by_client_id.call_count == 2

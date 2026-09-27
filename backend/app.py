@@ -130,8 +130,16 @@ async def stop():
         set_scheduler_state(False)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to persist stop: {e}")
+    # Entry orders still resting at Alpaca would fill after the stop.
+    try:
+        cancelled = _get_trader().cancel_open_buy_orders()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Stopped, but cancelling open buy orders failed: {e}",
+        )
     await _get_notifier().notify_system_stop("Manual stop via API")
-    return {"status": "stopped"}
+    return {"status": "stopped", "cancelled_buy_orders": cancelled}
 
 
 @app.post("/start", dependencies=[Depends(_require_secret)])

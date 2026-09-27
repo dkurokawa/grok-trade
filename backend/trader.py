@@ -21,6 +21,10 @@ from alpaca.trading.requests import (
 )
 
 
+class OrderStateUnknown(RuntimeError):
+    """A submit failed and we could not confirm whether Alpaca accepted it."""
+
+
 class DuplicateOrderError(Exception):
     """Alpaca rejected the order because its client_order_id was already used.
 
@@ -100,6 +104,23 @@ class Trader:
             for o in orders
             if o.side == OrderSide.BUY
         ]
+
+    def cancel_open_buy_orders(self) -> int:
+        """Cancel every open BUY order and return how many were cancelled.
+
+        Used by a manual stop: an entry order still resting at Alpaca would
+        otherwise fill after trading was stopped. Sell-side orders (the
+        stop-loss / take-profit legs protecting held positions) are left alone.
+        Failures propagate to the caller.
+        """
+        orders = self.trading_client.get_orders()
+        assert not isinstance(orders, dict)  # see get_account()
+        cancelled = 0
+        for o in orders:
+            if o.side == OrderSide.BUY:
+                self.trading_client.cancel_order_by_id(o.id)
+                cancelled += 1
+        return cancelled
 
     def get_open_buy_order_symbols(self) -> set:
         """未約定の「買い」注文が出ている銘柄。
@@ -293,25 +314,39 @@ class Trader:
             return result
 
         except Exception as e:
-            # F6: 発注前の事前確認 (get_order_by_client_id, 上) と
-            # submit_order() のこの呼び出しの間に別の呼び出しが先に同じ
-            # client_order_id で発注しているレースだと、Alpaca は 422 で
-            # 拒否する。メッセージ文字列には頼らず、もう一度
-            # get_order_by_client_id() で実在を確認できた場合だけ
-            # DuplicateOrderError にする（それ以外の 422 や理由不明のエラーは
-            # 従来どおり「発注失敗」として None を返す）。
-            if client_order_id and isinstance(e, APIError) and e.status_code == 422:
-                post_submit_existing = None
+            # The submit failed, but it may have failed *after* Alpaca took the
+            # order (timeout, dropped connection, 5xx), or because a racing call
+            # already submitted the same client_order_id (422). Look it up once
+            # by our own id instead of trusting the error or its message.
+            if client_order_id:
+                found: Any = None
                 try:
-                    post_submit_existing = self.trading_client.get_order_by_client_id(client_order_id)
-                except Exception:
-                    pass
-                if post_submit_existing is not None:
-                    assert not isinstance(post_submit_existing, dict)  # see get_account()
-                    raise DuplicateOrderError(
-                        f"Order for {symbol} already submitted (client_order_id={client_order_id}, "
-                        f"existing order_id={post_submit_existing.id})"
-                    ) from e
+                    found = self.trading_client.get_order_by_client_id(client_order_id)
+                except Exception as lookup_error:  # noqa: BLE001
+                    if isinstance(lookup_error, APIError) and lookup_error.status_code == 404:
+                        found = None  # confirmed: Alpaca does not have it
+                    else:
+                        raise OrderStateUnknown(
+                            f"Order for {symbol} (client_order_id={client_order_id}) failed with "
+                            f"{e!r} and its state could not be confirmed: {lookup_error!r}"
+                        ) from e
+                if found is not None:
+                    assert not isinstance(found, dict)  # see get_account()
+                    if isinstance(e, APIError) and e.status_code == 422:
+                        raise DuplicateOrderError(
+                            f"Order for {symbol} already submitted (client_order_id={client_order_id}, "
+                            f"existing order_id={found.id})"
+                        ) from e
+                    print(f"[Trader] Submit raised {e!r}, but Alpaca has the order: {found.id}")
+                    return {
+                        "order_id": str(found.id),
+                        "symbol": found.symbol,
+                        "side": found.side.value if found.side else side.value,
+                        "qty": float(found.qty or 0),
+                        "type": found.type.value if found.type else order_type,
+                        "status": found.status.value,
+                        "submitted_at": str(found.submitted_at),
+                    }
 
             print(f"[Trader] Order error: {e}")
             return None
