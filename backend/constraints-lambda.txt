@@ -1,0 +1,5 @@
+# Lambda python3.11 runs on Amazon Linux 2 (glibc 2.26): only manylinux2014 wheels load there.
+# numpy >= 2.3 and pandas >= 2.3.3 publish only manylinux_2_28 wheels for cp311.
+# Regenerate: uv pip compile requirements.txt -c constraints-lambda.txt --python-version 3.11 --python-platform x86_64-manylinux_2_17 -o requirements.lock
+numpy<2.3
+pandas<2.3.3
