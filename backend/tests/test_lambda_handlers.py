@@ -24,6 +24,20 @@ class TestTaskDispatch:
         check.assert_awaited_once()
         assert result == {"ok": True, "task": "emergency_check"}
 
+    def test_retries_secrets_on_every_invocation(self, dynamo_table):
+        # A cold-start SSM failure must not disable the drawdown monitor for the
+        # life of a warm container: every invocation retries (a no-op once loaded).
+        import lambda_trading
+
+        with (
+            patch.object(lambda_trading, "emergency_check", new_callable=AsyncMock),
+            patch.object(lambda_trading, "load_secrets") as load,
+        ):
+            lambda_trading.handler({"task": "emergency_check"}, None)
+            lambda_trading.handler({"task": "emergency_check"}, None)
+
+        assert load.call_count == 2
+
     def test_unknown_task_raises(self, dynamo_table):
         import lambda_trading
 

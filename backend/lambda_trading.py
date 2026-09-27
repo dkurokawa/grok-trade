@@ -38,6 +38,10 @@ def handler(event, context):
     # fire time, not whenever this Lambda actually started. Absent for a
     # manual invocation, in which case trading_core falls back to now().
     scheduled_time = event.get("scheduled_time")
+    # Retry SSM on every invocation until it has succeeded once. The call at
+    # import time can fail on a cold start; without this, a warm container
+    # would keep skipping the drawdown monitor for as long as it lives.
+    load_secrets()
     # Resolved at call time rather than bound at import, so the job actually
     # invoked is the module attribute (patchable in tests, and re-imported
     # cleanly on a warm container).

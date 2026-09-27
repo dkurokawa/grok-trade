@@ -560,13 +560,48 @@ async def trading_cycle(scheduled_time: str | None = None) -> None:
                 except Exception as alert_error:  # noqa: BLE001
                     print(f"[Discord] Alert failed: {alert_error}")
                 raise
+            # A cancel only removes what has not filled yet. Whatever filled
+            # before it is a real position and must be recorded, not dropped.
+            status = _trader.get_order_status(order["order_id"])
+            filled_qty = status["filled_qty"] if status else None
+            if filled_qty:
+                log_trade(
+                    cycle_id=cycle_id,
+                    symbol=symbol,
+                    action=decision["action"],
+                    quantity=filled_qty,
+                    price=status["filled_avg_price"] or price if status else price,
+                    order_type=decision.get("order_type", "market"),
+                    status="partially_filled_then_cancelled",
+                    alpaca_order_id=order["order_id"],
+                    stop_loss=decision.get("stop_loss"),
+                    take_profit=decision.get("take_profit"),
+                )
+            if filled_qty or status is None:
+                what = (
+                    f"{filled_qty:g} of {decision['quantity']} shares had already filled"
+                    if filled_qty
+                    else "its fill status could not be read"
+                )
+                try:
+                    await _notifier.notify_alert(
+                        f"Order {order['order_id']} ({symbol}) was cancelled after trading stopped, "
+                        f"but {what}. Check the position.",
+                        "warning",
+                    )
+                except Exception as alert_error:  # noqa: BLE001
+                    print(f"[Discord] Alert failed: {alert_error}")
             log_pipeline(
                 **base,
                 rg_passed=True,
                 rg_adjustments=rg_result.adjustments,
-                order_submitted=False,
+                order_submitted=bool(filled_qty),
                 alpaca_order_id=order["order_id"],
-                execution_result={"skipped": "stopped_during_send", "cancelled": order["order_id"]},
+                execution_result={
+                    "skipped": "stopped_during_send",
+                    "cancelled": order["order_id"],
+                    "filled_qty": filled_qty,
+                },
             )
             return
 

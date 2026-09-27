@@ -179,6 +179,12 @@ class TestFullTradingCycle:
             mock_guard.check_system_health.return_value = MagicMock(allowed=True)
             mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
             mock_guard.max_daily_loss = 500
+            mock_trader.get_order_status.return_value = {
+                "order_id": "x",
+                "status": "canceled",
+                "filled_qty": 0,
+                "filled_avg_price": None,
+            }
 
             from trading_core import trading_cycle
 
@@ -188,8 +194,50 @@ class TestFullTradingCycle:
         order_id = mock_trader.execute_order.return_value["order_id"]
         mock_trader.cancel_order.assert_called_once_with(order_id)
         mock_log_trade.assert_not_called()
+        mock_notifier.notify_alert.assert_not_called()
         results = [c.kwargs.get("execution_result") for c in mock_log.call_args_list]
         assert any(r and r.get("skipped") == "stopped_during_send" for r in results)
+
+    @pytest.mark.asyncio
+    async def test_partial_fill_before_cancel_is_recorded_and_alerted(
+        self, mock_trader, mock_grok, mock_opus, mock_notifier
+    ):
+        """A cancel only removes the unfilled part; the filled shares are a real position."""
+        states = iter([True, True, False])  # _ready, pre-send check, post-send check
+        with (
+            patch("trading_core.trader", mock_trader),
+            patch("trading_core.grok", mock_grok),
+            patch("trading_core.opus", mock_opus),
+            patch("trading_core.notifier", mock_notifier),
+            patch("trading_core.guard") as mock_guard,
+            patch("trading_core.get_scheduler_state", side_effect=lambda: next(states, False)),
+            patch("trading_core.log_pipeline") as mock_log,
+            patch("trading_core.log_trade") as mock_log_trade,
+        ):
+            mock_guard.check_system_health.return_value = MagicMock(allowed=True)
+            mock_guard.check.return_value = MagicMock(allowed=True, adjustments=[])
+            mock_guard.max_daily_loss = 500
+            mock_trader.get_order_status.return_value = {
+                "order_id": "x",
+                "status": "canceled",
+                "filled_qty": 3.0,
+                "filled_avg_price": 101.5,
+            }
+
+            from trading_core import trading_cycle
+
+            await trading_cycle()
+
+        mock_trader.execute_order.assert_called_once()
+        order_id = mock_trader.execute_order.return_value["order_id"]
+        mock_trader.cancel_order.assert_called_once_with(order_id)
+        mock_log_trade.assert_called_once()
+        assert mock_log_trade.call_args.kwargs["quantity"] == 3.0
+        assert mock_log_trade.call_args.kwargs["price"] == 101.5
+        mock_notifier.notify_alert.assert_awaited_once()
+        assert "already filled" in mock_notifier.notify_alert.call_args.args[0]
+        submitted = [c.kwargs.get("order_submitted") for c in mock_log.call_args_list]
+        assert True in submitted
 
     @pytest.mark.asyncio
     async def test_hold_decision_no_trade(self, mock_trader, mock_grok, mock_notifier):
