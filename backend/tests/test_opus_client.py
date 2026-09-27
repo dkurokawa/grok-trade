@@ -278,9 +278,9 @@ class TestAnalyze:
     def test_analyze_returns_latency(self, client, mock_market_data):
         mock_response = MagicMock()
         mock_response.content = [MagicMock()]
-        mock_response.content[0].text = (
-            '"action": "hold", "symbol": "SPY", "quantity": 0, "reasoning": "wait", "confidence": 50}'
-        )
+        mock_response.content[
+            0
+        ].text = '"action": "hold", "symbol": "SPY", "quantity": 0, "reasoning": "wait", "confidence": 50}'
         client.client.messages.create = MagicMock(return_value=mock_response)
 
         _, latency = client.analyze(
