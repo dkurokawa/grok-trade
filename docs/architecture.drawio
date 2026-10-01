@@ -1,0 +1,131 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram id="architecture" name="grok-trade — 自動売買ボットの構成">
+  <mxGraphModel dx="1200" dy="700" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="583" math="0" shadow="0">
+    <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="ti" value="grok-trade — 自動売買ボットの構成" style="text;html=1;align=left;verticalAlign=middle;fontSize=20;fontStyle=1;fontColor=#232F3E;" vertex="1" parent="1">
+      <mxGeometry x="10" y="6" width="700" height="28" as="geometry"/>
+    </mxCell>
+    <mxCell id="su" value="AWS サーバーレス。ペーパートレード（投資助言ではない）" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=14;fontColor=#545B64;" vertex="1" parent="1">
+      <mxGeometry x="10" y="34" width="807" height="20" as="geometry"/>
+    </mxCell>
+    <mxCell id="tag" value="稼働中" style="text;html=1;align=right;verticalAlign=middle;fontSize=12.5;fontColor=#0F6E78;" vertex="1" parent="1">
+      <mxGeometry x="727" y="6" width="90" height="28" as="geometry"/>
+    </mxCell>
+      <mxCell id="gaws" value="AWS（ap-northeast-1）" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=13;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=45;spacingTop=8;grIconSize=40;fontColor=#232F3E;" vertex="1" parent="1">
+      <mxGeometry x="128" y="64" width="517" height="511" as="geometry"/>
+    </mxCell>
+    <mxCell id="sch1" value="&lt;b&gt;EventBridge&lt;br&gt;Scheduler&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12.5px&quot; color=&quot;#545B64&quot;&gt;30 分ごと&lt;br&gt;平日 9:30–15:30 ET&lt;/font&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;html=1;fontSize=15;fontStyle=0;aspect=fixed;verticalLabelPosition=bottom;verticalAlign=top;align=center;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;" vertex="1" parent="1">
+      <mxGeometry x="179" y="99" width="52" height="52" as="geometry"/>
+    </mxCell>
+    <mxCell id="sch2" value="&lt;b&gt;EventBridge&lt;br&gt;Scheduler&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12.5px&quot; color=&quot;#545B64&quot;&gt;5 分ごと&lt;br&gt;平日 9:30–15:55 ET&lt;/font&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;html=1;fontSize=15;fontStyle=0;aspect=fixed;verticalLabelPosition=bottom;verticalAlign=top;align=center;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;" vertex="1" parent="1">
+      <mxGeometry x="179" y="236" width="52" height="52" as="geometry"/>
+    </mxCell>
+    <mxCell id="emg" value="&lt;b&gt;emergency_check&lt;/b&gt;&lt;br&gt;ドローダウン 5% 超で全ポジションを清算して停止" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=12.5;fontColor=#545B64;" vertex="1" parent="1">
+      <mxGeometry x="147" y="372" width="112" height="84" as="geometry"/>
+    </mxCell>
+    <mxCell id="lt" value="&lt;b&gt;Lambda[trading]&lt;/b&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;html=1;fontSize=15;fontStyle=0;aspect=fixed;verticalLabelPosition=top;verticalAlign=bottom;align=center;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;" vertex="1" parent="1">
+      <mxGeometry x="296" y="179" width="52" height="52" as="geometry"/>
+    </mxCell>
+    <mxCell id="stg" value="&lt;b&gt;取引 1 サイクルの段&lt;/b&gt;&lt;br&gt;Stage 1　Grok　相場の収集&lt;br&gt;↓&lt;br&gt;Stage 2　判断（Grok / Opus）&lt;br&gt;↓&lt;br&gt;Stage 2.5　判断の検証&lt;br&gt;↓&lt;br&gt;Stage 3　Risk Guard&lt;br&gt;↓&lt;br&gt;Stage 4　Alpaca に発注" style="rounded=1;arcSize=6;html=1;whiteSpace=wrap;fillColor=#FFFFFF;strokeColor=#4A5A66;strokeWidth=1.3;fontSize=12.5;fontColor=#232F3E;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;" vertex="1" parent="1">
+      <mxGeometry x="385" y="90" width="250" height="230" as="geometry"/>
+    </mxCell>
+    <mxCell id="ssm" value="&lt;b&gt;Parameter Store&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12.5px&quot; color=&quot;#545B64&quot;&gt;/grok-trade/*&lt;/font&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;html=1;fontSize=15;fontStyle=0;aspect=fixed;verticalLabelPosition=bottom;verticalAlign=top;align=center;gradientColor=none;fillColor=#E7157B;strokeColor=none;pointerEvents=1;shape=mxgraph.aws4.parameter_store;" vertex="1" parent="1">
+      <mxGeometry x="296" y="319" width="52" height="52" as="geometry"/>
+    </mxCell>
+    <mxCell id="ddb" value="&lt;b&gt;Amazon DynamoDB&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12.5px&quot; color=&quot;#545B64&quot;&gt;パイプラインログ&lt;br&gt;取引履歴・稼働フラグ&lt;br&gt;スロットロック&lt;/font&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;html=1;fontSize=15;fontStyle=0;aspect=fixed;labelPosition=left;verticalLabelPosition=middle;align=right;verticalAlign=middle;spacingRight=9;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;" vertex="1" parent="1">
+      <mxGeometry x="534" y="359" width="52" height="52" as="geometry"/>
+    </mxCell>
+    <mxCell id="br" value="&lt;b&gt;ブラウザ&lt;/b&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;html=1;fontSize=15;fontStyle=0;aspect=fixed;verticalLabelPosition=top;verticalAlign=bottom;align=center;fillColor=#545B64;strokeColor=none;shape=mxgraph.aws4.client;" vertex="1" parent="1">
+      <mxGeometry x="39" y="374" width="52" height="52" as="geometry"/>
+    </mxCell>
+    <mxCell id="vc" value="&lt;b&gt;Vercel&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12.5px&quot; color=&quot;#545B64&quot;&gt;Next.js&lt;br&gt;ダッシュボード&lt;br&gt;Basic 認証&lt;/font&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;html=1;fontSize=15;fontStyle=0;aspect=fixed;verticalLabelPosition=bottom;verticalAlign=top;align=center;shape=image;imageAspect=1;labelBackgroundColor=none;image=data:image/svg+xml,%3Csvg%20fill%3D%22%23000000%22%20role%3D%22img%22%20viewBox%3D%220%200%2024%2024%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Ctitle%3EVercel%3C%2Ftitle%3E%3Cpath%20d%3D%22m12%201.608%2012%2020.784H0Z%22%2F%3E%3C%2Fsvg%3E;" vertex="1" parent="1">
+      <mxGeometry x="41" y="446" width="48" height="48" as="geometry"/>
+    </mxCell>
+    <mxCell id="fu" value="Lambda Function URL" style="rounded=1;arcSize=6;html=1;whiteSpace=wrap;fillColor=#FFFFFF;strokeColor=#4A5A66;strokeWidth=1.3;fontSize=13;fontColor=#232F3E;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;" vertex="1" parent="1">
+      <mxGeometry x="330" y="452" width="120" height="36" as="geometry"/>
+    </mxCell>
+    <mxCell id="la" value="&lt;b&gt;Lambda[api]&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12.5px&quot; color=&quot;#545B64&quot;&gt;FastAPI + Mangum&lt;/font&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;dashed=0;html=1;fontSize=15;fontStyle=0;aspect=fixed;verticalLabelPosition=bottom;verticalAlign=top;align=center;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;" vertex="1" parent="1">
+      <mxGeometry x="534" y="444" width="52" height="52" as="geometry"/>
+    </mxCell>
+    <mxCell id="sg" value="xAI Grok&lt;br&gt;収集・判断" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12.5;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group;strokeColor=#7D8998;fillColor=#FAFAFB;verticalAlign=middle;align=center;fontColor=#6B7684;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="657" y="80" width="160" height="56" as="geometry"/>
+    </mxCell>
+    <mxCell id="sa" value="" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12.5;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group;strokeColor=#7D8998;fillColor=#FAFAFB;verticalAlign=top;align=left;spacingLeft=8;spacingTop=2;fontColor=#6B7684;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="657" y="142" width="160" height="56" as="geometry"/>
+    </mxCell>
+    <mxCell id="sai" value="" style="sketch=0;outlineConnect=0;fontColor=#6B7684;dashed=0;html=1;fontSize=15;fontStyle=0;aspect=fixed;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;spacingLeft=9;shape=image;imageAspect=1;labelBackgroundColor=none;image=data:image/svg+xml,%3Csvg%20fill%3D%22%237D8998%22%20role%3D%22img%22%20viewBox%3D%220%200%2024%2024%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Ctitle%3EAnthropic%3C%2Ftitle%3E%3Cpath%20d%3D%22M17.3041%203.541h-3.6718l6.696%2016.918H24Zm-10.6082%200L0%2020.459h3.7442l1.3693-3.5527h7.0052l1.3693%203.5528h3.7442L10.5363%203.5409Zm-.3712%2010.2232%202.2914-5.9456%202.2914%205.9456Z%22%2F%3E%3C%2Fsvg%3E;" vertex="1" parent="1">
+      <mxGeometry x="667" y="150" width="40" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="sat" value="Anthropic&lt;br&gt;Claude Opus&lt;br&gt;opus のときだけ" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=12.5;fontColor=#545B64;" vertex="1" parent="1">
+      <mxGeometry x="711" y="146" width="104" height="48" as="geometry"/>
+    </mxCell>
+    <mxCell id="sp" value="Alpaca&lt;br&gt;ペーパートレード" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12.5;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group;strokeColor=#7D8998;fillColor=#FAFAFB;verticalAlign=middle;align=center;fontColor=#6B7684;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="657" y="204" width="160" height="56" as="geometry"/>
+    </mxCell>
+    <mxCell id="sd" value="" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12.5;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group;strokeColor=#7D8998;fillColor=#FAFAFB;verticalAlign=top;align=left;spacingLeft=8;spacingTop=2;fontColor=#6B7684;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="657" y="266" width="160" height="56" as="geometry"/>
+    </mxCell>
+    <mxCell id="sdi" value="" style="sketch=0;outlineConnect=0;fontColor=#6B7684;dashed=0;html=1;fontSize=15;fontStyle=0;aspect=fixed;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;spacingLeft=9;shape=image;imageAspect=1;labelBackgroundColor=none;image=data:image/svg+xml,%3Csvg%20fill%3D%22%237D8998%22%20role%3D%22img%22%20viewBox%3D%220%200%2024%2024%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Ctitle%3EDiscord%3C%2Ftitle%3E%3Cpath%20d%3D%22M20.317%204.3698a19.7913%2019.7913%200%2000-4.8851-1.5152.0741.0741%200%2000-.0785.0371c-.211.3753-.4447.8648-.6083%201.2495-1.8447-.2762-3.68-.2762-5.4868%200-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077%200%2000-.0785-.037%2019.7363%2019.7363%200%2000-4.8852%201.515.0699.0699%200%2000-.0321.0277C.5334%209.0458-.319%2013.5799.0992%2018.0578a.0824.0824%200%2000.0312.0561c2.0528%201.5076%204.0413%202.4228%205.9929%203.0294a.0777.0777%200%2000.0842-.0276c.4616-.6304.8731-1.2952%201.226-1.9942a.076.076%200%2000-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077%200%2001-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743%200%2001.0776-.0105c3.9278%201.7933%208.18%201.7933%2012.0614%200a.0739.0739%200%2001.0785.0095c.1202.099.246.1981.3728.2924a.077.077%200%2001-.0066.1276%2012.2986%2012.2986%200%2001-1.873.8914.0766.0766%200%2000-.0407.1067c.3604.698.7719%201.3628%201.225%201.9932a.076.076%200%2000.0842.0286c1.961-.6067%203.9495-1.5219%206.0023-3.0294a.077.077%200%2000.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061%200%2000-.0312-.0286zM8.02%2015.3312c-1.1825%200-2.1569-1.0857-2.1569-2.419%200-1.3332.9555-2.4189%202.157-2.4189%201.2108%200%202.1757%201.0952%202.1568%202.419%200%201.3332-.9555%202.4189-2.1569%202.4189zm7.9748%200c-1.1825%200-2.1569-1.0857-2.1569-2.419%200-1.3332.9554-2.4189%202.1569-2.4189%201.2108%200%202.1757%201.0952%202.1568%202.419%200%201.3332-.946%202.4189-2.1568%202.4189Z%22%2F%3E%3C%2Fsvg%3E;" vertex="1" parent="1">
+      <mxGeometry x="667" y="274" width="40" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="sdt" value="Discord&lt;br&gt;通知" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=12.5;fontColor=#545B64;" vertex="1" parent="1">
+      <mxGeometry x="711" y="270" width="104" height="48" as="geometry"/>
+    </mxCell>
+    <mxCell id="pe0" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#4A5A66;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" edge="1" parent="1" source="sch1" target="lt">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#4A5A66;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.75;entryDx=0;entryDy=0;" edge="1" parent="1" source="sch2" target="lt">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#4A5A66;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="lt" target="stg">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#4A5A66;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="ssm" target="lt">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#7D8998;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=1;exitY=0.078;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=1;dashPattern=5 4;" edge="1" parent="1" source="stg" target="sg">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#7D8998;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=1;exitY=0.348;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=1;dashPattern=5 4;" edge="1" parent="1" source="stg" target="sa">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#7D8998;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=1;exitY=0.617;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=1;dashPattern=5 4;" edge="1" parent="1" source="stg" target="sp">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#7D8998;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=1;exitY=0.887;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=1;dashPattern=5 4;" edge="1" parent="1" source="stg" target="sd">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#4A5A66;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=0.7;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="stg" target="ddb">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#4A5A66;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="br" target="vc">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe10" value="x-api-key" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#4A5A66;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="vc" target="fu">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#4A5A66;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="fu" target="la">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="pe12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=8;html=1;strokeColor=#4A5A66;strokeWidth=1.5;endArrow=blockThin;endFill=1;fontSize=12.5;fontColor=#545B64;labelBackgroundColor=#ffffff;spacingTop=-2;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="la" target="ddb">
+      <mxGeometry relative="1" as="geometry">
+      </mxGeometry>
+    </mxCell>
+  </root>
+  </mxGraphModel>
+  </diagram>
+</mxfile>

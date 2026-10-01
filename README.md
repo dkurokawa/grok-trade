@@ -8,6 +8,12 @@ Grok と Claude Opus を組み合わせた自動株式トレーディングボ�
 > （`ALPACA_PAPER=false`）での利用は想定しておらず推奨しない。このリポジトリのコード・設定・
 > ドキュメントのいずれも特定の銘柄の売買を推奨するものではない。
 
+## 構成図
+
+![architecture](docs/architecture.svg)
+
+EventBridge Scheduler が市場時間中だけ Lambda[trading] を起動し、Grok での相場収集、判断（Grok / Opus）、判断の検証、Risk Guard、Alpaca への発注の順に処理する。ダッシュボードは Vercel から Lambda Function URL 経由で Lambda[api] を呼ぶ。稼働中（ペーパートレード・投資助言ではない）。
+
 ## アーキテクチャ
 
 AWS サーバーレス構成。取引サイクルは EventBridge Scheduler が市場時間中だけ起動する。
