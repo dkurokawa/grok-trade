@@ -11,10 +11,14 @@ import { NextRequest, NextResponse } from "next/server";
  */
 const ALLOWED_PATHS = new Set(["status", "trades", "decisions", "pipeline"]);
 
-export async function GET(req: NextRequest, { params }: { params: { path: string[] } }) {
-  const target = params.path.join("/");
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  const { path } = await params;
+  const target = path.join("/");
 
-  if (params.path.length !== 1 || !ALLOWED_PATHS.has(target)) {
+  if (path.length !== 1 || !ALLOWED_PATHS.has(target)) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 

@@ -21,7 +21,7 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const user = process.env.DASHBOARD_USER;
   const password = process.env.DASHBOARD_PASSWORD;
 
